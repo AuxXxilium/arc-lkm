@@ -67,9 +67,9 @@ jobs:
           - version: 7.1
             platform: v1000
             parm: "dev-v7 prod-v7"
-          - version: 7.1
-            platform: kvmx64
-            parm: "dev-v7 prod-v7"
+          #- version: 7.1
+          #  platform: kvmx64
+          #  parm: "dev-v7 prod-v7"
 
           - version: 7.2
             platform: apollolake
@@ -104,9 +104,9 @@ jobs:
           - version: 7.2
             platform: v1000
             parm: "dev-v7 prod-v7"
-          - version: 7.2
-            platform: kvmx64
-            parm: "dev-v7 prod-v7"
+          #- version: 7.2
+          #  platform: kvmx64
+          #  parm: "dev-v7 prod-v7"
 
     runs-on: ubuntu-latest
 
