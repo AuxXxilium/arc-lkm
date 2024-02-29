@@ -46,8 +46,8 @@
  */
 static bool is_fixable(struct scsi_device *sdp)
 {
-    return  (sdp->host->hostt->syno_port_type == SYNO_PORT_TYPE_SAS ||
-            (sdp->host->hostt->syno_port_type != SYNO_PORT_TYPE_SATA &&
+    return (sdp->host->hostt->syno_port_type == SYNO_PORT_TYPE_SAS ||
+           (sdp->host->hostt->syno_port_type != SYNO_PORT_TYPE_SATA &&
             strcmp(sdp->host->hostt->name, VIRTIO_HOST_ID) == 0));
 }
 
