@@ -112,7 +112,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@main
 
       - name: Init Env
         run: |
@@ -214,9 +214,9 @@ jobs:
           sudo cp -a ${ROOT_PATH}/build_env/ds.${{ matrix.platform }}-${{ matrix.version }}/source/output ${ROOT_PATH}/source/
 
       - name: Upload to Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: rp-lkms
+          name: rp-lkms-${{ matrix.platform }}-${{ matrix.version }}
           path: |
             ${{ github.workspace }}/source/output/*
 
@@ -246,9 +246,9 @@ jobs:
           sudo timedatectl set-timezone "Europe/Berlin" 
 
       - name: Download from Artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
-          name: rp-lkms
+          name: rp-lkms-${{ matrix.platform }}-${{ matrix.version }}
           path: ./rp-lkms
 
       - name: Calculate Version
@@ -275,17 +275,18 @@ jobs:
           fi
 
       - name: Zip Lkms
-        if: env.VERSION != ''
+        if: success() && env.VERSION != ''
         run: |
           zip -9 rp-lkms.zip -j rp-lkms/*
 
       - name: Release
-        uses: softprops/action-gh-release@v1
-        if: env.VERSION != ''
+        if: success() && env.VERSION != ''
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: ${{ env.VERSION }}
+          tag: ${{ env.VERSION }}
           prerelease: ${{ inputs.prerelease }}
+          allowUpdates: true
           body: |
             ${{ steps.Changelog.outputs.changelog }}
-          files: |
+          artifacts: |
             rp-lkms.zip
