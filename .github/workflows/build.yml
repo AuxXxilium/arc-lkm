@@ -279,7 +279,7 @@ jobs:
         if: success() && env.VERSION != ''
         run: |
           VERSION="${{ env.VERSION }}"
-          zip -9 rp-lkms.zip -j output/*
+          zip -9 rp-lkms-${VERSION}.zip -j output/*
 
       - name: Release
         if: success() && env.VERSION != ''
@@ -291,4 +291,4 @@ jobs:
           body: |
             ${{ steps.Changelog.outputs.changelog }}
           artifacts: |
-            rp-lkms.zip
+            rp-lkms-*.zip
