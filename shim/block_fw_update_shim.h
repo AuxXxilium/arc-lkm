@@ -4,4 +4,4 @@
 int register_fw_update_shim(void);
 int unregister_fw_update_shim(void);
 
-#endif //REDPILL_BLOCK_FW_UPDATE_SHIM_H
+#endif // REDPILL_BLOCK_FW_UPDATE_SHIM_H

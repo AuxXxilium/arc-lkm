@@ -4,4 +4,4 @@
 int register_disk_smart_shim(void);
 int unregister_disk_smart_shim(void);
 
-#endif //REDPILL_SMART_SHIM_H
+#endif // REDPILL_SMART_SHIM_H

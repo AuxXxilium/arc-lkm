@@ -3,4 +3,4 @@
 
 void RPDBG_print_execve_call(const char *filename, const char *const *argv);
 
-#endif //REDPILL_DEBUG_EXECVE_H
+#endif // REDPILL_DEBUG_EXECVE_H

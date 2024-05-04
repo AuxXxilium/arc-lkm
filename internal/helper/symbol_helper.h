@@ -7,7 +7,7 @@
  * Workaround for kallsyms_lookup_name in kernels > 5.7
  * https://github.com/xcellerator/linux_kernel_hacking/issues/3
  */
-extern unsigned long (*kln_func)(const char*);
+extern unsigned long (*kln_func)(const char *);
 int get_kln_p(void);
 
 /**
@@ -19,4 +19,4 @@ int get_kln_p(void);
  */
 bool kernel_has_symbol(const char *name);
 
-#endif //REDPILL_SYMBOL_HELPER_H
+#endif // REDPILL_SYMBOL_HELPER_H

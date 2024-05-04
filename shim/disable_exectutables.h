@@ -4,4 +4,4 @@
 int register_disable_executables_shim(void);
 int unregister_disable_executables_shim(void);
 
-#endif //REDPILL_DISABLE_EXECTUTABLES_H
+#endif // REDPILL_DISABLE_EXECTUTABLES_H

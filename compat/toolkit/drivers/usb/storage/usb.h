@@ -1,5 +1,6 @@
 /**
- * Cherry-picked USB.h internal structures from Linux v4.4.x. If possible avoid using anything from this file like fire.
+ * Cherry-picked USB.h internal structures from Linux v4.4.x. If possible avoid
+ * using anything from this file like fire.
  *
  * ORIGINAL FILE HEADER PRESERVED BELOW
  * ------------------------------------
@@ -47,89 +48,91 @@
 #ifndef REDPILL_USB_H
 #define REDPILL_USB_H
 
-#warning "Using compatibility file for drivers/usb/storage/usb.h - if possible do NOT compile using toolkit"
+#warning                                                                       \
+    "Using compatibility file for drivers/usb/storage/usb.h - if possible do NOT compile using toolkit"
 
-//This structure didn't change substantially since v2.6 days; 5.14 is simply the newest one we checked - it will
-// probably remain unchanged for years to come
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0) && LINUX_VERSION_CODE < KERNEL_VERSION(5,14,0) //v3.3 - v5.14
-#include <linux/usb.h> //struct usb_sg_request
+// This structure didn't change substantially since v2.6 days; 5.14 is simply
+// the newest one we checked - it will
+//  probably remain unchanged for years to come
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 3, 0) &&                           \
+    LINUX_VERSION_CODE < KERNEL_VERSION(5, 14, 0) // v3.3 - v5.14
+#include <linux/usb.h>                            //struct usb_sg_request
 
 struct us_data;
-typedef int (*trans_cmnd)(struct scsi_cmnd *, struct us_data*);
-typedef int (*trans_reset)(struct us_data*);
-typedef void (*proto_cmnd)(struct scsi_cmnd*, struct us_data*);
-typedef void (*extra_data_destructor)(void *);	/* extra data destructor */
-typedef void (*pm_hook)(struct us_data *, int);	/* power management hook */
+typedef int (*trans_cmnd)(struct scsi_cmnd *, struct us_data *);
+typedef int (*trans_reset)(struct us_data *);
+typedef void (*proto_cmnd)(struct scsi_cmnd *, struct us_data *);
+typedef void (*extra_data_destructor)(void *);  /* extra data destructor */
+typedef void (*pm_hook)(struct us_data *, int); /* power management hook */
 
 struct us_data {
-	/* The device we're working with
-	 * It's important to note:
-	 *    (o) you must hold dev_mutex to change pusb_dev
-	 */
-	struct mutex		dev_mutex;	 /* protect pusb_dev */
-	struct usb_device	*pusb_dev;	 /* this usb_device */
-	struct usb_interface	*pusb_intf;	 /* this interface */
-	struct us_unusual_dev   *unusual_dev;	 /* device-filter entry     */
-	unsigned long		fflags;		 /* fixed flags from filter */
-	unsigned long		dflags;		 /* dynamic atomic bitflags */
-	unsigned int		send_bulk_pipe;	 /* cached pipe values */
-	unsigned int		recv_bulk_pipe;
-	unsigned int		send_ctrl_pipe;
-	unsigned int		recv_ctrl_pipe;
-	unsigned int		recv_intr_pipe;
+  /* The device we're working with
+   * It's important to note:
+   *    (o) you must hold dev_mutex to change pusb_dev
+   */
+  struct mutex dev_mutex;             /* protect pusb_dev */
+  struct usb_device *pusb_dev;        /* this usb_device */
+  struct usb_interface *pusb_intf;    /* this interface */
+  struct us_unusual_dev *unusual_dev; /* device-filter entry     */
+  unsigned long fflags;               /* fixed flags from filter */
+  unsigned long dflags;               /* dynamic atomic bitflags */
+  unsigned int send_bulk_pipe;        /* cached pipe values */
+  unsigned int recv_bulk_pipe;
+  unsigned int send_ctrl_pipe;
+  unsigned int recv_ctrl_pipe;
+  unsigned int recv_intr_pipe;
 
-	/* information about the device */
-	char			*transport_name;
-	char			*protocol_name;
-	__le32			bcs_signature;
-	u8			subclass;
-	u8			protocol;
-	u8			max_lun;
+  /* information about the device */
+  char *transport_name;
+  char *protocol_name;
+  __le32 bcs_signature;
+  u8 subclass;
+  u8 protocol;
+  u8 max_lun;
 
-	u8			ifnum;		 /* interface number   */
-	u8			ep_bInterval;	 /* interrupt interval */
+  u8 ifnum;        /* interface number   */
+  u8 ep_bInterval; /* interrupt interval */
 
-	/* function pointers for this device */
-	trans_cmnd		transport;	 /* transport function	   */
-	trans_reset		transport_reset; /* transport device reset */
-	proto_cmnd		proto_handler;	 /* protocol handler	   */
+  /* function pointers for this device */
+  trans_cmnd transport;        /* transport function	   */
+  trans_reset transport_reset; /* transport device reset */
+  proto_cmnd proto_handler;    /* protocol handler	   */
 
-	/* SCSI interfaces */
-	struct scsi_cmnd	*srb;		 /* current srb		*/
-	unsigned int		tag;		 /* current dCBWTag	*/
-	char			scsi_name[32];	 /* scsi_host name	*/
+  /* SCSI interfaces */
+  struct scsi_cmnd *srb; /* current srb		*/
+  unsigned int tag;      /* current dCBWTag	*/
+  char scsi_name[32];    /* scsi_host name	*/
 
-	/* control and bulk communications data */
-	struct urb		*current_urb;	 /* USB requests	 */
-	struct usb_ctrlrequest	*cr;		 /* control requests	 */
-	struct usb_sg_request	current_sg;	 /* scatter-gather req.  */
-	unsigned char		*iobuf;		 /* I/O buffer		 */
-	dma_addr_t		iobuf_dma;	 /* buffer DMA addresses */
-	struct task_struct	*ctl_thread;	 /* the control thread   */
+  /* control and bulk communications data */
+  struct urb *current_urb;          /* USB requests	 */
+  struct usb_ctrlrequest *cr;       /* control requests	 */
+  struct usb_sg_request current_sg; /* scatter-gather req.  */
+  unsigned char *iobuf;             /* I/O buffer		 */
+  dma_addr_t iobuf_dma;             /* buffer DMA addresses */
+  struct task_struct *ctl_thread;   /* the control thread   */
 
-	/* mutual exclusion and synchronization structures */
-	struct completion	cmnd_ready;	 /* to sleep thread on	    */
-	struct completion	notify;		 /* thread begin/end	    */
-	wait_queue_head_t	delay_wait;	 /* wait during reset	    */
-	struct delayed_work	scan_dwork;	 /* for async scanning      */
+  /* mutual exclusion and synchronization structures */
+  struct completion cmnd_ready;   /* to sleep thread on	    */
+  struct completion notify;       /* thread begin/end	    */
+  wait_queue_head_t delay_wait;   /* wait during reset	    */
+  struct delayed_work scan_dwork; /* for async scanning      */
 
-	/* subdriver information */
-	void			*extra;		 /* Any extra data          */
-	extra_data_destructor	extra_destructor;/* extra data destructor   */
+  /* subdriver information */
+  void *extra;                            /* Any extra data          */
+  extra_data_destructor extra_destructor; /* extra data destructor   */
 #ifdef CONFIG_PM
-	pm_hook			suspend_resume_hook;
+  pm_hook suspend_resume_hook;
 #endif
 
-	/* hacks for READ CAPACITY bug handling */
-	int			use_last_sector_hacks;
-	int			last_sector_retries;
+  /* hacks for READ CAPACITY bug handling */
+  int use_last_sector_hacks;
+  int last_sector_retries;
 };
-#endif //LINUX_VERSION_CODE check
-
+#endif // LINUX_VERSION_CODE check
 
 struct Scsi_Host;
 static inline struct us_data *host_to_us(struct Scsi_Host *host) {
-    return (struct us_data *) host->hostdata;
+  return (struct us_data *)host->hostdata;
 }
 
-#endif //REDPILL_USB_H
+#endif // REDPILL_USB_H
