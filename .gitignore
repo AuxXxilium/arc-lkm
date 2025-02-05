@@ -59,5 +59,3 @@ linux-*/
 .idea/
 .vscode/
 _compile.sh
-./rp-lkms/
-rp-lkms/
