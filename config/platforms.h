@@ -46,6 +46,120 @@ const struct hw_config platformConfig = {
         .psu_status = {HWMON_PSU_NULL_ID},
         .sys_current = {HWMON_SYS_CURR_NULL_ID},
     }};
+#elif defined(RP_PLATFORM_AVOTON)
+const struct hw_config platformConfig = {
+    .name = "", // "DS1515+, DS1815+, DS415+, DS2415+, RS815+, RS815RP+, RS2416+, RS2416RP+",
+    .pci_stubs = {
+        {.type = __VPD_TERMINATOR__}},
+    .emulate_rtc = false,
+    .swap_serial = false,
+    .reinit_ttyS0 = true,
+    .fix_disk_led_ctrl = true,
+    .has_cpu_temp = true,
+    .is_dt = false,
+    .hwmon = {
+        .sys_thermal = {HWMON_SYS_TZONE_REMOTE1_ID, HWMON_SYS_TZONE_LOCAL_ID, HWMON_SYS_TZONE_REMOTE2_ID},
+        .sys_voltage = {HWMON_SYS_VSENS_VCC_ID, HWMON_SYS_VSENS_VPP_ID, HWMON_SYS_VSENS_V33_ID, HWMON_SYS_VSENS_V5_ID, HWMON_SYS_VSENS_V12_ID},
+        .sys_fan_speed_rpm = {HWMON_SYS_FAN1_ID, HWMON_SYS_FAN2_ID},
+        .hdd_backplane = {HWMON_SYS_HDD_BP_NULL_ID},
+        .psu_status = {HWMON_PSU_NULL_ID},
+        .sys_current = {HWMON_SYS_CURR_NULL_ID},
+    }};
+#elif defined(RP_PLATFORM_BRASWELL)
+const struct hw_config platformConfig = {
+    .name = "", // "DS216+, DS216+II, DS716+, DS716+II, DS916+, DS416play",
+    .pci_stubs = {
+        {.type = __VPD_TERMINATOR__}},
+    .emulate_rtc = false,
+    .swap_serial = false,
+    .reinit_ttyS0 = true,
+    .fix_disk_led_ctrl = false,
+    .has_cpu_temp = true,
+    .is_dt = false,
+    .hwmon = {
+        .sys_thermal = {HWMON_SYS_TZONE_REMOTE1_ID, HWMON_SYS_TZONE_LOCAL_ID, HWMON_SYS_TZONE_REMOTE2_ID},
+        .sys_voltage = {HWMON_SYS_VSENS_VCC_ID, HWMON_SYS_VSENS_VPP_ID, HWMON_SYS_VSENS_V33_ID, HWMON_SYS_VSENS_V5_ID, HWMON_SYS_VSENS_V12_ID},
+        .sys_fan_speed_rpm = {HWMON_SYS_FAN1_ID, HWMON_SYS_FAN2_ID},
+        .hdd_backplane = {HWMON_SYS_HDD_BP_NULL_ID},
+        .psu_status = {HWMON_PSU_NULL_ID},
+        .sys_current = {HWMON_SYS_CURR_NULL_ID},
+    }};
+#elif defined(RP_PLATFORM_BROMOLOW)
+const struct hw_config platformConfig = {
+    .name = "", // "DS3615xs",
+    .pci_stubs = {
+        {.type = __VPD_TERMINATOR__}},
+    .emulate_rtc = false,
+    .swap_serial = false,
+    .reinit_ttyS0 = true,
+    .fix_disk_led_ctrl = false,
+    .has_cpu_temp = true,
+    .is_dt = false,
+    .hwmon = {
+        .sys_thermal = {HWMON_SYS_TZONE_REMOTE1_ID, HWMON_SYS_TZONE_LOCAL_ID, HWMON_SYS_TZONE_REMOTE2_ID},
+        .sys_voltage = {HWMON_SYS_VSENS_VCC_ID, HWMON_SYS_VSENS_VPP_ID, HWMON_SYS_VSENS_V33_ID, HWMON_SYS_VSENS_V5_ID, HWMON_SYS_VSENS_V12_ID},
+        .sys_fan_speed_rpm = {HWMON_SYS_FAN1_ID, HWMON_SYS_FAN2_ID},
+        .hdd_backplane = {HWMON_SYS_HDD_BP_NULL_ID},
+        .psu_status = {HWMON_PSU_NULL_ID},
+        .sys_current = {HWMON_SYS_CURR_NULL_ID},
+    }};
+#elif defined(RP_PLATFORM_CEDARVIEW)
+const struct hw_config platformConfig = {
+    .name = "", // "DS713+ DS1513+ DS1813+",
+    .pci_stubs = {
+        {.type = __VPD_TERMINATOR__}},
+    .emulate_rtc = false,
+    .swap_serial = false,
+    .reinit_ttyS0 = true,
+    .fix_disk_led_ctrl = false,
+    .has_cpu_temp = true,
+    .is_dt = false,
+    .hwmon = {
+        .sys_thermal = {HWMON_SYS_TZONE_REMOTE1_ID, HWMON_SYS_TZONE_LOCAL_ID, HWMON_SYS_TZONE_REMOTE2_ID},
+        .sys_voltage = {HWMON_SYS_VSENS_VCC_ID, HWMON_SYS_VSENS_VPP_ID, HWMON_SYS_VSENS_V33_ID, HWMON_SYS_VSENS_V5_ID, HWMON_SYS_VSENS_V12_ID},
+        .sys_fan_speed_rpm = {HWMON_SYS_FAN1_ID, HWMON_SYS_FAN2_ID},
+        .hdd_backplane = {HWMON_SYS_HDD_BP_NULL_ID},
+        .psu_status = {HWMON_PSU_NULL_ID},
+        .sys_current = {HWMON_SYS_CURR_NULL_ID},
+    }};
+#elif defined(RP_PLATFORM_EVANSPORT)
+const struct hw_config platformConfig = {
+    .name = "", // "",
+    .pci_stubs = {
+        {.type = __VPD_TERMINATOR__}},
+    .emulate_rtc = false,
+    .swap_serial = false,
+    .reinit_ttyS0 = true,
+    .fix_disk_led_ctrl = false,
+    .has_cpu_temp = true,
+    .is_dt = false,
+    .hwmon = {
+        .sys_thermal = {HWMON_SYS_TZONE_REMOTE1_ID, HWMON_SYS_TZONE_LOCAL_ID, HWMON_SYS_TZONE_REMOTE2_ID},
+        .sys_voltage = {HWMON_SYS_VSENS_VCC_ID, HWMON_SYS_VSENS_VPP_ID, HWMON_SYS_VSENS_V33_ID, HWMON_SYS_VSENS_V5_ID, HWMON_SYS_VSENS_V12_ID},
+        .sys_fan_speed_rpm = {HWMON_SYS_FAN1_ID, HWMON_SYS_FAN2_ID},
+        .hdd_backplane = {HWMON_SYS_HDD_BP_NULL_ID},
+        .psu_status = {HWMON_PSU_NULL_ID},
+        .sys_current = {HWMON_SYS_CURR_NULL_ID},
+    }};
+#elif defined(RP_PLATFORM_GRANTLEY)
+const struct hw_config platformConfig = {
+    .name = "", // "HD6500 FS6400",
+    .pci_stubs = {
+        {.type = __VPD_TERMINATOR__}},
+    .emulate_rtc = false,
+    .swap_serial = false,
+    .reinit_ttyS0 = true,
+    .fix_disk_led_ctrl = true,
+    .has_cpu_temp = true,
+    .is_dt = false,
+    .hwmon = {
+        .sys_thermal = {HWMON_SYS_TZONE_REMOTE1_ID, HWMON_SYS_TZONE_LOCAL_ID, HWMON_SYS_TZONE_REMOTE2_ID},
+        .sys_voltage = {HWMON_SYS_VSENS_VCC_ID, HWMON_SYS_VSENS_VPP_ID, HWMON_SYS_VSENS_V33_ID, HWMON_SYS_VSENS_V5_ID, HWMON_SYS_VSENS_V12_ID},
+        .sys_fan_speed_rpm = {HWMON_SYS_FAN1_ID, HWMON_SYS_FAN2_ID},
+        .hdd_backplane = {HWMON_SYS_HDD_BP_NULL_ID},
+        .psu_status = {HWMON_PSU_NULL_ID},
+        .sys_current = {HWMON_SYS_CURR_NULL_ID},
+    }};
 #elif defined(RP_PLATFORM_BROADWELLNK)
 const struct hw_config platformConfig = {
     .name = "", // "DS3018xs RS1619xs+ DS1621xs+ RS3621RPxs RS3621xs+ RS4021xs+ DS3622xs+ SA3400 SA3600 FS1018 FS3600",
@@ -195,6 +309,66 @@ const struct hw_config platformConfig = {
         .sys_voltage = {HWMON_SYS_VSENS_VCC_ID, HWMON_SYS_VSENS_VPP_ID, HWMON_SYS_VSENS_V33_ID, HWMON_SYS_VSENS_V5_ID, HWMON_SYS_VSENS_V12_ID},
         .sys_fan_speed_rpm = {HWMON_SYS_FAN1_ID, HWMON_SYS_FAN2_ID},
         .hdd_backplane = {HWMON_SYS_HDD_BP_NULL_ID},
+        .psu_status = {HWMON_PSU_NULL_ID},
+        .sys_current = {HWMON_SYS_CURR_NULL_ID},
+    }};
+#elif defined(RP_PLATFORM_GEMINILAKENK)
+const struct hw_config platformConfig = {
+    .name = "", // "DS225+ DS425+ DS625slim",
+    .pci_stubs = {
+        {.type = __VPD_TERMINATOR__}},
+    .emulate_rtc = true,
+    .swap_serial = false,
+    .reinit_ttyS0 = false,
+    .fix_disk_led_ctrl = true,
+    .has_cpu_temp = true,
+    .is_dt = true,
+    .hwmon = {
+        .sys_thermal = {HWMON_SYS_TZONE_REMOTE1_ID, HWMON_SYS_TZONE_LOCAL_ID, HWMON_SYS_TZONE_REMOTE2_ID},
+        .sys_voltage = {HWMON_SYS_VSENS_VCC_ID, HWMON_SYS_VSENS_VPP_ID, HWMON_SYS_VSENS_V33_ID, HWMON_SYS_VSENS_V5_ID, HWMON_SYS_VSENS_V12_ID},
+        // FIXME add NULL ID to workaroud scemd coredump in SA6400 7.2-64551
+        .sys_fan_speed_rpm = {HWMON_SYS_FAN1_ID, HWMON_SYS_FAN2_ID, HWMON_SYS_FAN_NULL_ID},
+        .hdd_backplane = {HWMON_SYS_HDD_BP_DETECT_ID, HWMON_SYS_HDD_BP_NULL_ID},
+        .psu_status = {HWMON_PSU_NULL_ID},
+        .sys_current = {HWMON_SYS_CURR_NULL_ID},
+    }};
+#elif defined(RP_PLATFORM_R1000NK)
+const struct hw_config platformConfig = {
+    .name = "", // "DS725+",
+    .pci_stubs = {
+        {.type = __VPD_TERMINATOR__}},
+    .emulate_rtc = true,
+    .swap_serial = false,
+    .reinit_ttyS0 = false,
+    .fix_disk_led_ctrl = true,
+    .has_cpu_temp = true,
+    .is_dt = true,
+    .hwmon = {
+        .sys_thermal = {HWMON_SYS_TZONE_REMOTE1_ID, HWMON_SYS_TZONE_LOCAL_ID, HWMON_SYS_TZONE_REMOTE2_ID},
+        .sys_voltage = {HWMON_SYS_VSENS_VCC_ID, HWMON_SYS_VSENS_VPP_ID, HWMON_SYS_VSENS_V33_ID, HWMON_SYS_VSENS_V5_ID, HWMON_SYS_VSENS_V12_ID},
+        // FIXME add NULL ID to workaroud scemd coredump in SA6400 7.2-64551
+        .sys_fan_speed_rpm = {HWMON_SYS_FAN1_ID, HWMON_SYS_FAN2_ID, HWMON_SYS_FAN_NULL_ID},
+        .hdd_backplane = {HWMON_SYS_HDD_BP_DETECT_ID, HWMON_SYS_HDD_BP_NULL_ID},
+        .psu_status = {HWMON_PSU_NULL_ID},
+        .sys_current = {HWMON_SYS_CURR_NULL_ID},
+    }};
+#elif defined(RP_PLATFORM_V1000NK)
+const struct hw_config platformConfig = {
+    .name = "", // "DS925+ DS1525+ DS1825+ DS1825xs+ RS2825RP+",
+    .pci_stubs = {
+        {.type = __VPD_TERMINATOR__}},
+    .emulate_rtc = true,
+    .swap_serial = false,
+    .reinit_ttyS0 = false,
+    .fix_disk_led_ctrl = true,
+    .has_cpu_temp = true,
+    .is_dt = true,
+    .hwmon = {
+        .sys_thermal = {HWMON_SYS_TZONE_REMOTE1_ID, HWMON_SYS_TZONE_LOCAL_ID, HWMON_SYS_TZONE_REMOTE2_ID},
+        .sys_voltage = {HWMON_SYS_VSENS_VCC_ID, HWMON_SYS_VSENS_VPP_ID, HWMON_SYS_VSENS_V33_ID, HWMON_SYS_VSENS_V5_ID, HWMON_SYS_VSENS_V12_ID},
+        // FIXME add NULL ID to workaroud scemd coredump in SA6400 7.2-64551
+        .sys_fan_speed_rpm = {HWMON_SYS_FAN1_ID, HWMON_SYS_FAN2_ID, HWMON_SYS_FAN_NULL_ID},
+        .hdd_backplane = {HWMON_SYS_HDD_BP_DETECT_ID, HWMON_SYS_HDD_BP_NULL_ID},
         .psu_status = {HWMON_PSU_NULL_ID},
         .sys_current = {HWMON_SYS_CURR_NULL_ID},
     }};
