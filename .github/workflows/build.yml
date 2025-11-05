@@ -31,9 +31,6 @@ jobs:
           - version: 7.1
             platform: apollolake
             parm: 'prod-v7 dev-v7'
-          #- version: 7.1
-          #  platform: braswell
-          #  parm: 'prod-v7 dev-v7'
           - version: 7.1
             platform: broadwell
             parm: 'prod-v7 dev-v7'
@@ -46,9 +43,6 @@ jobs:
           - version: 7.1
             platform: broadwellntbap
             parm: 'prod-v7 dev-v7'
-          #- version: 7.1 
-          #  platform: bromolow
-          #  parm: 'prod-v7 dev-v7'
           - version: 7.1
             platform: denverton
             parm: 'prod-v7 dev-v7'
@@ -71,9 +65,6 @@ jobs:
           - version: 7.2
             platform: apollolake
             parm: 'prod-v7 dev-v7'
-          #- version: 7.2
-          #  platform: braswell
-          #  parm: 'prod-v7 dev-v7'
           - version: 7.2
             platform: broadwell
             parm: 'prod-v7 dev-v7'
@@ -96,14 +87,66 @@ jobs:
             platform: geminilake
             parm: 'prod-v7 dev-v7'
           - version: 7.2
+            platform: geminilakenk
+            parm: 'prod-v7 dev-v7'
+          - version: 7.2
             platform: purley
             parm: 'prod-v7 dev-v7'
           - version: 7.2
             platform: r1000
             parm: 'prod-v7 dev-v7'
           - version: 7.2
+            platform: r1000nk
+            parm: 'prod-v7 dev-v7'
+          - version: 7.2
             platform: v1000
             parm: 'prod-v7 dev-v7'
+          - version: 7.2
+            platform: v1000nk
+            parm: 'prod-v7 dev-v7'
+
+          #- version: 7.3
+          #  platform: apollolake
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: broadwell
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: broadwellnk
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: broadwellnkv2
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: broadwellntbap
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: denverton
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: epyc7002
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: geminilake
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: geminilakenk
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: purley
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: r1000
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: r1000nk
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: v1000
+          #  parm: 'prod-v7 dev-v7'
+          #- version: 7.3
+          #  platform: v1000nk
+          #  parm: 'prod-v7 dev-v7'
 
     runs-on: ubuntu-latest
 
@@ -180,7 +223,6 @@ jobs:
           mkdir -p /source/output
 
           repo=${{ github.server_url }}/${{ github.repository }}
-          # 5.10.55 Temporary use of https://github.com/XPEnology-Community/redpill-lkm5
           # And currently only USB OK, @jim3ma is adapting to 7.2.
           # [ "${KVER:0:1}" = "5" ] && repo=https://github.com/AuxXxilium/redpill-lkm5
 
@@ -194,7 +236,7 @@ jobs:
               strip -g redpill.ko    # Discard symbols from object files. 
               RPKOVER=$(modinfo --field=vermagic redpill.ko | awk '{print $1}')
               gzip redpill.ko
-              if [ "${{ matrix.platform }}" = "epyc7002" ]; then
+              if [ "${{ matrix.platform }}" = "epyc7002" ] || [ "${{ matrix.platform }}" = "geminilakenk" ] || [ "${{ matrix.platform }}" = "r1000nk" ] || [ "${{ matrix.platform }}" = "v1000nk" ]; then
                 mv -f ./redpill.ko.gz /source/output/rp-${{ matrix.platform }}-${{ matrix.version }}-${RPKOVER/+/}-`echo ${a} | awk -F'-' '{print $1}'`.ko.gz
               else
                 mv -f ./redpill.ko.gz /source/output/rp-${{ matrix.platform }}-${RPKOVER/+/}-`echo ${a} | awk -F'-' '{print $1}'`.ko.gz
