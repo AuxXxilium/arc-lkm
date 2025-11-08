@@ -313,7 +313,7 @@ jobs:
       - name: Zip Lkms
         if: env.VERSION != ''
         run: |
-          zip -j9 rp-lkms.zip ${{ github.workspace }}/rp-lkms/*/*
+          zip -j9 rp-lkms.zip ${{ github.workspace }}/rp-lkms/*/* ${{ github.workspace }}/rp-lkms/VERSION
 
       - name: Release
         if: success() && env.VERSION != ''
