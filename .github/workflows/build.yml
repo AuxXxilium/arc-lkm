@@ -27,41 +27,7 @@ jobs:
   build:
     strategy:
       matrix:
-        include:
-          - version: 7.1
-            platform: apollolake
-            parm: 'prod-v7 dev-v7'
-          - version: 7.1
-            platform: broadwell
-            parm: 'prod-v7 dev-v7'
-          - version: 7.1
-            platform: broadwellnk
-            parm: 'prod-v7 dev-v7'
-          - version: 7.1
-            platform: broadwellnkv2
-            parm: 'prod-v7 dev-v7'
-          - version: 7.1
-            platform: broadwellntbap
-            parm: 'prod-v7 dev-v7'
-          - version: 7.1
-            platform: denverton
-            parm: 'prod-v7 dev-v7'
-          - version: 7.1
-            platform: epyc7002
-            parm: 'prod-v7 dev-v7'
-          - version: 7.1
-            platform: geminilake
-            parm: 'prod-v7 dev-v7'
-          - version: 7.1
-            platform: purley
-            parm: 'prod-v7 dev-v7'
-          - version: 7.1
-            platform: r1000
-            parm: 'prod-v7 dev-v7'
-          - version: 7.1
-            platform: v1000
-            parm: 'prod-v7 dev-v7'
-          
+        include:        
           - version: 7.2
             platform: apollolake
             parm: 'prod-v7 dev-v7'
