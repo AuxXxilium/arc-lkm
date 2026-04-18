@@ -1,9 +1,5 @@
 PWD   := $(shell pwd)
 
-ifeq ($(LINUX_SRC),)
-LINUX_SRC := "$(PWD)/../linux-3.10.x-bromolow-25426"
-endif
-
 SRCS-$(DBG_EXECVE) += debug/debug_execve.c
 ccflags-$(DBG_EXECVE) += -DRPDBG_EXECVE
 SRCS-y  += compat/string_compat.c \
@@ -66,6 +62,7 @@ ccflags-test += -DSTEALTH_MODE=2
 ccflags-prod += -DSTEALTH_MODE=3
 endif
 
+ccflags-y += --allow-store-data-races
 ccflags-y += ${ccflags-${RP_MODULE_TARGET}}
 else
 # during the first read of the makefile we don't get the RP_MODULE_TARGET - if for some reason we didn't get it during
@@ -80,15 +77,7 @@ CFLAGS_scsi_notifier_list.o += -std=gnu89
 
 # do NOT move this target - make <3.80 doesn't have a way to specify default target and takes the first one found
 default_error:
-	$(error You need to specify one of the following targets: dev-v6, dev-v7, test-v6, test-v7, prod-v6, prod-v7, clean)
-
-# All v6 targets
-dev-v6: # kernel running in v6.2+ OS, all symbols included, debug messages included
-	$(MAKE) -C $(LINUX_SRC) M=$(PWD) RP_MODULE_TARGET="dev" RP_MODULE_TARGET_VER="6" modules
-test-v6: # kernel running in v6.2+ OS, fully stripped with only warning & above (no debugs or info)
-	$(MAKE) -C $(LINUX_SRC) M=$(PWD) RP_MODULE_TARGET="test" RP_MODULE_TARGET_VER="6" modules
-prod-v6: # kernel running in v6.2+ OS, fully stripped with no debug messages
-	$(MAKE) -C $(LINUX_SRC) M=$(PWD) RP_MODULE_TARGET="prod" RP_MODULE_TARGET_VER="6" modules
+	$(error You need to specify one of the following targets: dev-v7, test-v7, prod-v7, clean)
 
 # All v7 targets
 dev-v7: # kernel running in v6.2+ OS, all symbols included, debug messages included
