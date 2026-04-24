@@ -232,12 +232,13 @@ build_lkms() {
   done
   
   echo ""
+  local TOTAL_BUILDS=$((${#platforms[@]} * 2))  # 2 targets (dev + prod) per platform
   log_info "=== Build Summary ==="
-  log_info "Successful: $SUCCESSFUL/${#platforms[@]}"
-  log_info "Failed: $FAILED/${#platforms[@]}"
+  log_info "Successful: $SUCCESSFUL/$TOTAL_BUILDS"
+  log_info "Failed: $FAILED/$TOTAL_BUILDS"
   
   if [ $FAILED -gt 0 ]; then
-    log_warn "Failed platforms: ${FAILED_PLATFORMS[*]}"
+    log_warn "Failed builds: ${FAILED_PLATFORMS[*]}"
   fi
   
   echo ""
