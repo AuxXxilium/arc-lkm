@@ -20,6 +20,8 @@ static void dbg_compare_cap_value(SYNO_HW_CAPABILITY id, int computed_support)
     CAPABILITY org_cap = { '\0' };
     org_cap.id = id;
     int ovs_fout = call_overridden_symbol(org_fout, GetHwCapability_ovs, &org_cap);
+    DBG_ALLOW_UNUSED(org_fout);
+    DBG_ALLOW_UNUSED(ovs_fout);
 
     pr_loc_dbg("comparing GetHwCapability(id=%d)->support => computed=%d vs. real=%d [org_fout=%d, ovs_fout=%d]", id,
                computed_support, org_cap.support, org_fout, ovs_fout);
@@ -62,6 +64,7 @@ static int GetHwCapability_shim(CAPABILITY *cap)
 
             int org_fout = -1;
             int ovs_fout = call_overridden_symbol(org_fout, GetHwCapability_ovs, cap);
+            DBG_ALLOW_UNUSED(ovs_fout);
             pr_loc_dbg("proxying GetHwCapability(id=%d)->support => real=%d [org_fout=%d, ovs_fout=%d]", cap->id,
                        cap->support, org_fout, ovs_fout);
 

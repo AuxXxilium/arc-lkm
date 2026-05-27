@@ -14,12 +14,35 @@ struct runtime_config current_config = {
         .pid = VID_PID_EMPTY,
         .dom_size_mib = 1024, // usually the image will be used with ESXi and thus it will be ~100MB anyway
     },
+    .uart = {
+        .custom_ttyS0 = false,
+        .ttyS0_iobase = STD_COM1_IOBASE,
+        .ttyS0_irq = STD_COM1_IRQ,
+    },
     .port_thaw = true,
     .netif_num = 0,
     .macs = {'\0'},
     .cmdline_blacklist = {'\0'},
     .hw_config = NULL,
 };
+
+static bool validate_uart_config(const struct uart_runtime_config *uart)
+{
+    if (!uart->custom_ttyS0)
+        return true;
+
+    if (uart->ttyS0_iobase == 0) {
+        pr_loc_err("Custom ttyS0 iobase is empty");
+        return false;
+    }
+
+    if (uart->ttyS0_irq == 0) {
+        pr_loc_err("Custom ttyS0 irq is empty");
+        return false;
+    }
+
+    return true;
+}
 
 static inline bool validate_sn(const serial_no *sn)
 {
@@ -201,6 +224,7 @@ static bool validate_runtime_config(const struct runtime_config *config)
 
     valid &= validate_sn(&config->sn);
     valid &= validate_boot_dev(&config->boot_media);
+    valid &= validate_uart_config(&config->uart);
     valid &= validate_nets(config->netif_num, config->macs);
     valid &= validate_platform_config(config->hw_config);
 

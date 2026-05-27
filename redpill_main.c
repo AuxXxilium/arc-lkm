@@ -52,7 +52,7 @@ static int __init init_(void)
          get_kln_p() < 0 //Find pointer of kallsyms_lookup_name function, This MUST be the first entry
          || (out = extract_config_from_cmdline(&current_config)) != 0 //This MUST be the second entry
          || (out = populate_runtime_config(&current_config)) != 0 //This MUST be third
-         || (out = register_uart_fixer(current_config.hw_config)) != 0 //Fix consoles ASAP
+         || (out = register_uart_fixer(current_config.hw_config, &current_config.uart)) != 0 //Fix consoles ASAP
          || (out = register_scsi_notifier()) != 0 //Load SCSI notifier so that boot shim (& others) can use it
          || (out = register_sata_port_shim()) //This should be bfr boot shim as it can fix some things need by boot
          || (out = register_boot_shim(&current_config.boot_media)) //Make sure we're quick with this one

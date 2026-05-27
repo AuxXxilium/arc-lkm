@@ -160,6 +160,11 @@ static const int fake_smart[][ATA_SMART_RECORD_LEN] = {
     //rest of the attributes are esoteric or invalid for SSDs
 };
 
+static bool is_fake_temp_attr(u8 attr_id)
+{
+    return attr_id == 190 || attr_id == 194;
+}
+
 //SMART components versions (some of them CANNOT be changed)
 #define SMART_SNAP_VERSION 0x01 //version for the live data snapshot; vendor-specific
 #define WIN_SMART_DIG_LOG_VERSION 0x00 //WIN_SMART log directory version; see 8.55.6.8.1 for details
@@ -270,12 +275,14 @@ static __always_inline void put_ioctl_buffer(unsigned char *buffer)
 }
 
 /*************************************** ATAPI/WIN command interface handling *****************************************/
-static int populate_ata_id(const u8 *req_header, void __user *buff_ptr, const char* const disk_name)
+static int populate_ata_id(const u8 *req_header, void __user *buff_ptr, const char *const disk_name,
+                           const char *const disk_fw_rev)
 {
     pr_loc_dbg("Generating completely fake ATA IDENTITY");
 
     unsigned char *kbuf;
     char disk_serial[DISK_NAME_LEN];
+    const char *fw_rev = (disk_fw_rev && disk_fw_rev[0] != '\0') ? disk_fw_rev : "1.13.2";
     kzalloc_or_exit_int(kbuf, HDIO_DRIVE_CMD_HDR_OFFSET + sizeof(struct rp_hd_driveid));
     struct rp_hd_driveid *did = (void *)(kbuf + HDIO_DRIVE_CMD_HDR_OFFSET); //did=drive ID
 
@@ -287,7 +294,7 @@ static int populate_ata_id(const u8 *req_header, void __user *buff_ptr, const ch
     did->config = 0x0000; //15th bit = ATA device, rest is reserved/obsolete
     strscpy(disk_serial, disk_name, DISK_NAME_LEN > 20 ? 20 : DISK_NAME_LEN);
     set_ata_string(did->serial_no, disk_serial, 20);
-    set_ata_string(did->fw_rev, "1.13.2", 8);
+    set_ata_string(did->fw_rev, fw_rev, 8);
     set_ata_string(did->model, "Virtual HDD", 40);
     did->reserved50 = (1 << 14); //"shall be set to one"
     did->major_rev_num = 0xffff;
@@ -326,14 +333,15 @@ static int populate_ata_id(const u8 *req_header, void __user *buff_ptr, const ch
  * @return definitive exit code for the ioctl(); in practice 0 when succedded [regardless of the modifications made] or
  *         the same error code as org_ioctl_exec_result passed
  */
-static int handle_ata_cmd_identify(int org_ioctl_exec_result, const u8 *req_header, void __user *buff_ptr, const char* const disk_name)
+static int handle_ata_cmd_identify(int org_ioctl_exec_result, const u8 *req_header, void __user *buff_ptr,
+                                   const char *const disk_name, const char *const disk_fw_rev)
 {
     //ATA IDENTIFY should not fail - it may mean a problem with a disk or the "disk" is a adapter (e.g. IDE>SATA) with
     // no disk connected, or if executed against a USB flash drive... or it's an VirtIO SCSI disk read as ATA
     if (unlikely(org_ioctl_exec_result != 0)) {
         pr_loc_dbg("sd_ioctl(HDIO_DRIVE_CMD ; ATA_CMD_ID_ATA) failed with error=%d, attempting to emulate something",
                    org_ioctl_exec_result);
-        return populate_ata_id(req_header, buff_ptr, disk_name);
+        return populate_ata_id(req_header, buff_ptr, disk_name, disk_fw_rev);
     }
 
     //sanity check if requested ATA IDENTIFY sector count is really what we're planning to copy
@@ -386,7 +394,7 @@ static int handle_ata_cmd_identify(int org_ioctl_exec_result, const u8 *req_head
  * @return 0 on success, -EIO on unexpected call, -ENOMEM when memory reservation fails, or -EFAULT when data fails to
  *         copy to user buffer
  */
-static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr)
+static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr, bool include_temp)
 {
     pr_loc_dbg("Generating fake SMART values");
 
@@ -399,6 +407,7 @@ static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr
     }
 
     int i, j;
+    int attr_idx = 0;
     unsigned char *kbuf;
     kzalloc_or_exit_int(kbuf, ata_ioctl_buf_size(ATA_SMART_READ_VALUES_SECTORS));
     u8 *smart_values = (u8 *)(kbuf + HDIO_DRIVE_CMD_HDR_OFFSET);
@@ -415,9 +424,14 @@ static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr
 
     //copy ALL attribute bytes as we were asked for everything (including thresholds)
     for (i = 0; i < ARRAY_SIZE(fake_smart); i++) {
+        if (!include_temp && is_fake_temp_attr(fake_smart[i][0]))
+            continue;
+
         for (j = 0; j < 11; j++) {
-            smart_values[2 + (ATA_SMART_RECORD_LEN * i) + j] = fake_smart[i][j];
+            smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + j] = fake_smart[i][j];
         }
+
+        ++attr_idx;
     }
 
     //specify that we never ran any SMART tests and we're not running any
@@ -453,7 +467,7 @@ static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr
  * @return 0 on success, -EIO on unexpected call, -ENOMEM when memory reservation fails, or -EFAULT when data fails to
  *         copy to user buffer
  */
-static int populate_ata_smart_thresholds(const u8 *req_header, void __user *buff_ptr)
+static int populate_ata_smart_thresholds(const u8 *req_header, void __user *buff_ptr, bool include_temp)
 {
     pr_loc_dbg("Generating fake SMART thresholds");
 
@@ -466,6 +480,7 @@ static int populate_ata_smart_thresholds(const u8 *req_header, void __user *buff
     }
 
     int i;
+    int attr_idx = 0;
     unsigned char *kbuf;
     kzalloc_or_exit_int(kbuf, ata_ioctl_buf_size(ATA_SMART_READ_THRESHOLDS_SECTORS));
     u8 *smart_thresholds = (u8 *)(kbuf + HDIO_DRIVE_CMD_HDR_OFFSET);
@@ -482,8 +497,12 @@ static int populate_ata_smart_thresholds(const u8 *req_header, void __user *buff
 
     //copy a subset of attribute bytes as we were asked for thresholds only
     for (i = 0; i < ARRAY_SIZE(fake_smart); i++) {
-        smart_thresholds[2 + (ATA_SMART_RECORD_LEN * i) + 0] = fake_smart[i][0]; //entry id
-        smart_thresholds[2 + (ATA_SMART_RECORD_LEN * i) + 1] = fake_smart[i][11]; //threshold value
+        if (!include_temp && is_fake_temp_attr(fake_smart[i][0]))
+            continue;
+
+        smart_thresholds[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 0] = fake_smart[i][0]; //entry id
+        smart_thresholds[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 1] = fake_smart[i][11]; //threshold value
+        ++attr_idx;
     }
 
     ata_calc_sector_checksum(smart_thresholds);
@@ -643,16 +662,16 @@ static int populate_win_smart_exec_test(const u8 *req_header, void __user *buff_
  * @return 0 on success, -EIO on unexpected call, -ENOMEM when memory reservation fails, or -EFAULT when data fails to
  *         copy to user buffer
  */
-static int __always_inline handle_ata_cmd_smart(const u8 *req_header, void __user *buff_ptr)
+static int __always_inline handle_ata_cmd_smart(const u8 *req_header, void __user *buff_ptr, bool include_temp)
 {
     pr_loc_dbg("Got SMART *command* - looking for feature=0x%x", req_header[HDIO_DRIVE_CMD_HDR_FEATURE]);
 
     switch (req_header[HDIO_DRIVE_CMD_HDR_FEATURE]) {
         case ATA_SMART_READ_VALUES: //read all SMART values snapshot
-            return populate_ata_smart_values(req_header, buff_ptr);
+            return populate_ata_smart_values(req_header, buff_ptr, include_temp);
 
         case ATA_SMART_READ_THRESHOLDS: //read all SMART thresholds snapshot
-            return populate_ata_smart_thresholds(req_header, buff_ptr);
+            return populate_ata_smart_thresholds(req_header, buff_ptr, include_temp);
 
         case ATA_SMART_ENABLE: //enable previously disabled SMART support
             pr_loc_wrn("Attempted ATA_SMART_ENABLE modification!");\
@@ -702,18 +721,21 @@ static int handle_hdio_drive_cmd_ioctl(struct block_device *bdev, fmode_t mode, 
             // we need convert SG_IO smart info into ATA format instead of fake it.
 
             // use the real serial if it's not empty, other wise use the disk name
-            char * disk_serial;
+            const char *disk_serial;
+            char disk_fw_rev[9] = {'\0'};
             disk_serial = rp_fetch_block_serial(bdev->bd_disk->disk_name);
             if (disk_serial == NULL || strlen(disk_serial) < 3) {
                 disk_serial = bdev->bd_disk->disk_name;
             }
 
-            return handle_ata_cmd_identify(ioctl_out, req_header, buff_ptr, disk_serial);
+            rp_fetch_block_fwrev(bdev->bd_disk->disk_name, disk_fw_rev, sizeof(disk_fw_rev));
+
+            return handle_ata_cmd_identify(ioctl_out, req_header, buff_ptr, disk_serial, disk_fw_rev);
 
         //this command asks directly for the SMART data of the drive and will fail on drives with no real SMART support
         case ATA_CMD_SMART: //if the drive supports SMART it will just return the data as-is, no need to proxy
             pr_loc_dbg_ioctl(cmd, "ATA_CMD_SMART", bdev);
-            return (ioctl_out == 0) ? 0 : handle_ata_cmd_smart(req_header, buff_ptr);
+            return (ioctl_out == 0) ? 0 : handle_ata_cmd_smart(req_header, buff_ptr, false);
 
         //We're only interested in a subset of commands - rest are simply redirected back
         default:
@@ -942,7 +964,8 @@ int sd_ioctl_smart_shim_uninstall(void)
  */
 static int sd_ioctl_canary(struct block_device *bdev, fmode_t mode, unsigned int cmd, unsigned long arg)
 {
-    int out;
+    int out = -EIO;
+    bool proxy_ioctl = false;
     spin_lock(&sd_ioctl_canary_lock);
 
     pr_loc_dbg("%s triggered for first ioctl()", __FUNCTION__);
@@ -951,37 +974,48 @@ static int sd_ioctl_canary(struct block_device *bdev, fmode_t mode, unsigned int
     if (unlikely(!sd_ioctl_canary_ovs)) {
         if (unlikely(!sd_fops)) {
             pr_loc_bug("Canary is already processed after obtaining lock BUT fops aren't here - the canary is broken");
-            return -EIO; //we don't really know the state
+            goto out_unlock; //we don't really know the state
         }
 
         pr_loc_dbg("Canary is already processed after obtaining lock - proxying to sd_fops->ioctl directly");
-        goto proxy_ioctl;
+        proxy_ioctl = true;
+        out = 0;
+        goto out_unlock;
     }
 
     if (unlikely(!bdev)) {
         pr_loc_bug("NULL block_device passed to %s", __FUNCTION__);
-        return -EIO;
+        goto out_unlock;
     }
 
     struct gendisk *disk = bdev->bd_disk;
     if (unlikely(!disk)) {
         pr_loc_bug("block_device w/o gendisk found");
-        return -EIO;
+        goto out_unlock;
     }
 
     sd_fops = (void *)disk->fops; //forcefully remove "const" protection here
     out = sd_ioctl_smart_shim_install();
     if (out != 0) {
         pr_loc_err("Failed to install proper SMART shim");
-        return -EIO;
+        out = -EIO;
+        goto out_unlock;
     }
 
     out = sd_ioctl_canary_uninstall(); //it will log what's wrong
-    spin_unlock(&sd_ioctl_canary_lock);
-    if (out != 0)
-        return -EIO; //we cannot continue as the sd_ioctl() wasn't restored and calling the shim can cause infinite loop
+    if (out != 0) {
+        out = -EIO; //we cannot continue as the sd_ioctl() wasn't restored and calling the shim can cause infinite loop
+        goto out_unlock;
+    }
 
-    proxy_ioctl:
+    proxy_ioctl = true;
+    out = 0;
+
+out_unlock:
+    spin_unlock(&sd_ioctl_canary_lock);
+    if (!proxy_ioctl)
+        return out;
+
     pr_loc_dbg("Canary finished - routing to sd_fops->ioctl = %pF<%p>", sd_fops->ioctl, sd_fops->ioctl);
     return sd_fops->ioctl(bdev, mode, cmd, arg);
 }

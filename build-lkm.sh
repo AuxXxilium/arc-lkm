@@ -43,6 +43,7 @@ STAGING_DIR="${TEMP_DIR}/staging"
 VERSION=""
 BUILD_ALL=false
 INTERACTIVE_MODE=false
+PLATFORM_FILTER=""
 
 # Platform kernel definitions
 PLATFORMS=(
@@ -53,6 +54,7 @@ PLATFORMS=(
   "broadwellntbap:4.4.302"
   "denverton:4.4.302"
   "epyc7002:5.10.55"
+  "epyc7003ntb:5.10.55"
   "geminilake:4.4.302"
   "geminilakenk:5.10.55"
   "purley:4.4.320"
@@ -70,13 +72,16 @@ ${BLUE}=== LKM Build Script ===${NC}
 ${GREEN}Usage:${NC} $0 [OPTIONS]
 
 ${GREEN}Options:${NC}
-  -v, --version VERSION    DSM/Toolkit version (7.1, 7.2, 7.3)
+  -v, --version VERSION    DSM/Toolkit version (7.1, 7.2, 7.3, 7.4)
+  -p, --platform NAME      Build only selected platform(s), comma-separated
   -a, --all                Build all versions (prod and dev)
   -h, --help               Show this help message
 
 ${GREEN}Examples:${NC}
   $0 -v 7.2                  Build 7.2 (prod and dev)
-  $0 --version 7.3           Build 7.3 (prod and dev)
+  $0 -v 7.2 -p epyc7002      Build only epyc7002 for 7.2 (dev and prod)
+  $0 -v 7.2 -p epyc7002,v1000nk  Build selected platforms only
+  $0 --version 7.4           Build 7.4 (prod and dev)
   $0 --all                   Build all versions
   $0                         Interactive mode
 
@@ -89,6 +94,10 @@ parse_args() {
     case $1 in
       -v|--version)
         VERSION="$2"
+        shift 2
+        ;;
+      -p|--platform)
+        PLATFORM_FILTER="$2"
         shift 2
         ;;
       -a|--all)
@@ -117,14 +126,16 @@ interactive_mode() {
     echo "Available versions:"
     echo "  1) 7.2"
     echo "  2) 7.3"
-    echo "  3) all"
+    echo "  3) 7.4"
+    echo "  4) all"
     echo ""
-    read -p "Select version (1-3, or enter version number): " VERSION_INPUT
+    read -p "Select version (1-4, or enter version number): " VERSION_INPUT
     
     case "$VERSION_INPUT" in
       1) VERSION="7.2" ;;
       2) VERSION="7.3" ;;
-      3) BUILD_ALL=true ;;
+      3) VERSION="7.4" ;;
+      4) BUILD_ALL=true ;;
       7.[0-9]) VERSION="$VERSION_INPUT" ;;
       *) log_error "Invalid selection"; exit 1 ;;
     esac
@@ -139,6 +150,30 @@ validate_inputs() {
   if [[ ! "$VERSION" =~ ^7\.[0-9]$ ]]; then
     log_error "Invalid version: $VERSION"
     exit 1
+  fi
+
+  if [ -n "$PLATFORM_FILTER" ]; then
+    IFS=',' read -r -a requested_platforms <<< "$PLATFORM_FILTER"
+    local req platform_known
+    for req in "${requested_platforms[@]}"; do
+      platform_known=false
+      for entry in "${PLATFORMS[@]}"; do
+        local p_name="${entry%%:*}"
+        if [ "$req" = "$p_name" ]; then
+          platform_known=true
+          break
+        fi
+      done
+
+      if [ "$platform_known" = false ]; then
+        log_error "Unknown platform in --platform: $req"
+        log_info "Known platforms:"
+        for entry in "${PLATFORMS[@]}"; do
+          echo "  - ${entry%%:*}"
+        done
+        exit 1
+      fi
+    done
   fi
 }
 
@@ -160,7 +195,47 @@ build_lkms() {
   local FAILED_PLATFORMS=()
   
   # Get platforms for version
-  local -a platforms=("${PLATFORMS[@]}")
+  local -a platforms=()
+  local -a requested_platforms=()
+  local entry
+
+  if [ -n "$PLATFORM_FILTER" ]; then
+    IFS=',' read -r -a requested_platforms <<< "$PLATFORM_FILTER"
+  fi
+
+  for entry in "${PLATFORMS[@]}"; do
+    local platform_name="${entry%%:*}"
+
+    if [ "$version" = "7.4" ]; then
+      [ "$platform_name" = "epyc7003ntb" ] || continue
+    elif [ "$platform_name" = "epyc7003ntb" ]; then
+      continue
+    fi
+
+    if [ -n "$PLATFORM_FILTER" ]; then
+      local requested=false
+      local req
+      for req in "${requested_platforms[@]}"; do
+        if [ "$platform_name" = "$req" ]; then
+          requested=true
+          break
+        fi
+      done
+
+      [ "$requested" = true ] || continue
+    fi
+
+    platforms+=("$entry")
+  done
+
+  if [ ${#platforms[@]} -eq 0 ]; then
+    if [ -n "$PLATFORM_FILTER" ]; then
+      log_error "No platforms left to build for version ${version} after applying --platform=${PLATFORM_FILTER}"
+    else
+      log_error "No platforms available for version ${version}"
+    fi
+    return 1
+  fi
   
   log_info "Building for ${#platforms[@]} platforms (dev + prod)"
   echo ""
@@ -239,6 +314,7 @@ build_lkms() {
   
   if [ $FAILED -gt 0 ]; then
     log_warn "Failed builds: ${FAILED_PLATFORMS[*]}"
+    return 1
   fi
   
   echo ""
@@ -280,11 +356,14 @@ build_all() {
   log_info "Building all versions..."
   echo ""
   
-  for ver in 7.2 7.3; do
+  for ver in 7.2 7.3 7.4; do
     log_info "Starting: Version $ver"
     VERSION="$ver"
     validate_inputs
-    build_lkms "$ver"
+    if ! build_lkms "$ver"; then
+      log_error "Build failed for version $ver"
+      return 1
+    fi
     log_info "Completed: Version $ver"
     echo ""
     sleep 2
@@ -315,7 +394,7 @@ main() {
     fi
   else
     validate_inputs
-    build_lkms "$VERSION"
+    build_lkms "$VERSION" || exit 1
   fi
   
   # Cleanup

@@ -928,7 +928,7 @@ int vuart_set_tx_callback(int line, vuart_callback_t *cb, char *buffer, int thre
         return 0;
     }
 
-    pr_loc_dbg("Setting TX callback for for ttyS%d (line=%d)", line, vdev->line);
+    pr_loc_dbg("Setting TX callback for ttyS%d (line=%d)", line, vdev->line);
     line = vdev->line; //this looks to make no sense BUT it does when serials are swapped
     if (likely(!flush_cbs[line])) { //if there was already a cb there we don't need to reserve memory
         kmalloc_or_exit_int(flush_cbs[line], sizeof(struct flush_callback));

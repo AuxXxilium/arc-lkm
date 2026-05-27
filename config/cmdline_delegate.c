@@ -212,6 +212,82 @@ static bool extract_port_thaw(bool *port_thaw, const char *param_pointer)
         return true;
 }
 
+static unsigned int default_uart_irq(unsigned long iobase)
+{
+    switch (iobase) {
+        case STD_COM1_IOBASE:
+        case STD_COM3_IOBASE:
+            return STD_COM1_IRQ;
+
+        case STD_COM2_IOBASE:
+        case STD_COM4_IOBASE:
+            return STD_COM2_IRQ;
+
+        default:
+            return 0;
+    }
+}
+
+static bool extract_ttyS0_uart(struct uart_runtime_config *uart, const char *param_pointer)
+{
+    ensure_cmdline_param(CMDLINE_KT_TTYS0);
+
+    const char *value = param_pointer + strlen_static(CMDLINE_KT_TTYS0);
+    if (strncmp(value, "serial,", strlen("serial,")) != 0)
+        return true;
+
+    value += strlen("serial,");
+
+    unsigned long iobase;
+    int out = kstrtoul(value, 0, &iobase);
+    if (unlikely(out != 0)) {
+        pr_loc_err("Call to %s() failed => %d", "kstrtoul", out);
+        return true;
+    }
+
+    uart->custom_ttyS0 = true;
+    uart->ttyS0_iobase = iobase;
+    if (uart->ttyS0_irq == STD_COM1_IRQ)
+        uart->ttyS0_irq = default_uart_irq(iobase);
+
+    pr_loc_dbg("ttyS0 assigned to serial iobase=0x%lx irq=%u", uart->ttyS0_iobase, uart->ttyS0_irq);
+    return true;
+}
+
+static bool extract_uart_iobase(struct uart_runtime_config *uart, const char *param_pointer)
+{
+    ensure_cmdline_param(CMDLINE_KT_UART_IOBASE);
+
+    unsigned long iobase;
+    int out = kstrtoul(param_pointer + strlen_static(CMDLINE_KT_UART_IOBASE), 0, &iobase);
+    if (unlikely(out != 0)) {
+        pr_loc_err("Call to %s() failed => %d", "kstrtoul", out);
+        return true;
+    }
+
+    uart->custom_ttyS0 = true;
+    uart->ttyS0_iobase = iobase;
+    pr_loc_dbg("Custom ttyS0 iobase set to 0x%lx", uart->ttyS0_iobase);
+    return true;
+}
+
+static bool extract_uart_irq(struct uart_runtime_config *uart, const char *param_pointer)
+{
+    ensure_cmdline_param(CMDLINE_KT_UART_IRQ);
+
+    unsigned long irq;
+    int out = kstrtoul(param_pointer + strlen_static(CMDLINE_KT_UART_IRQ), 0, &irq);
+    if (unlikely(out != 0)) {
+        pr_loc_err("Call to %s() failed => %d", "kstrtoul", out);
+        return true;
+    }
+
+    uart->custom_ttyS0 = true;
+    uart->ttyS0_irq = irq;
+    pr_loc_dbg("Custom ttyS0 irq set to %u", uart->ttyS0_irq);
+    return true;
+}
+
 /**
  * Extracts number of expected network interfaces (netif_num=<number>) from kernel cmd line
  *
@@ -429,17 +505,21 @@ int extract_config_from_cmdline(struct runtime_config *config)
         pr_loc_dbg("Param #%d: |%s|", param_counter++, single_param_chunk);
 
         //Stop after the first one matches
-        extract_hw(&config->hw, single_param_chunk)                      ||
-        extract_sn(&config->sn, single_param_chunk)                      ||
-        extract_boot_media_type(&config->boot_media, single_param_chunk) ||
-        extract_vid(&config->boot_media.vid, single_param_chunk)         ||
-        extract_pid(&config->boot_media.pid, single_param_chunk)         ||
-        extract_dom_max_size(&config->boot_media, single_param_chunk)    ||
-        extract_mfg(&config->boot_media.mfg_mode, single_param_chunk)    ||
-        extract_port_thaw(&config->port_thaw, single_param_chunk)        ||
-        extract_netif_num(&config->netif_num, single_param_chunk)        ||
-        extract_netif_macs(config->macs, single_param_chunk)             ||
-        report_unrecognized_option(single_param_chunk)                   ;
+        if (extract_hw(&config->hw, single_param_chunk)                      ||
+            extract_sn(&config->sn, single_param_chunk)                      ||
+            extract_boot_media_type(&config->boot_media, single_param_chunk) ||
+            extract_vid(&config->boot_media.vid, single_param_chunk)         ||
+            extract_pid(&config->boot_media.pid, single_param_chunk)         ||
+            extract_dom_max_size(&config->boot_media, single_param_chunk)    ||
+            extract_mfg(&config->boot_media.mfg_mode, single_param_chunk)    ||
+            extract_port_thaw(&config->port_thaw, single_param_chunk)        ||
+            extract_ttyS0_uart(&config->uart, single_param_chunk)            ||
+            extract_uart_iobase(&config->uart, single_param_chunk)           ||
+            extract_uart_irq(&config->uart, single_param_chunk)              ||
+            extract_netif_num(&config->netif_num, single_param_chunk)        ||
+            extract_netif_macs(config->macs, single_param_chunk)             ||
+            report_unrecognized_option(single_param_chunk))
+            continue;
     }
 
     if (populate_cmdline_blacklist(config->cmdline_blacklist, &config->hw) != 0) {

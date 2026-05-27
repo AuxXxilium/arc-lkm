@@ -114,6 +114,10 @@ jobs:
             platform: v1000nk
             parm: 'prod-v7 dev-v7'
 
+          - version: 7.4
+            platform: epyc7003ntb
+            parm: 'prod-v7 dev-v7'
+
     runs-on: ubuntu-latest
 
     steps:
@@ -202,7 +206,7 @@ jobs:
               strip -g redpill.ko    # Discard symbols from object files. 
               RPKOVER=$(modinfo --field=vermagic redpill.ko | awk '{print $1}')
               gzip redpill.ko
-              if [ "${{ matrix.platform }}" = "epyc7002" ] || [ "${{ matrix.platform }}" = "geminilakenk" ] || [ "${{ matrix.platform }}" = "r1000nk" ] || [ "${{ matrix.platform }}" = "v1000nk" ]; then
+              if [ "${{ matrix.platform }}" = "epyc7002" ] || [ "${{ matrix.platform }}" = "epyc7003ntb" ] || [ "${{ matrix.platform }}" = "geminilakenk" ] || [ "${{ matrix.platform }}" = "r1000nk" ] || [ "${{ matrix.platform }}" = "v1000nk" ]; then
                 mv -f ./redpill.ko.gz /source/output/rp-${{ matrix.platform }}-${{ matrix.version }}-${RPKOVER/+/}-`echo ${a} | awk -F'-' '{print $1}'`.ko.gz
               else
                 mv -f ./redpill.ko.gz /source/output/rp-${{ matrix.platform }}-${RPKOVER/+/}-`echo ${a} | awk -F'-' '{print $1}'`.ko.gz
@@ -260,12 +264,7 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           else
-            LATEST_TAG="$(curl -skL "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r ".tag_name" 2>/dev/null)"
-            if [[ -n "${LATEST_TAG}" && "`echo ${LATEST_TAG} | cut -d '.' -f 1,2`" = "`date +'%y.%m.%d'`" ]]; then  # format %y.%-m.$i
-              VERSION="`echo ${LATEST_TAG} | awk -F '.' '{$3=$3+1}1' OFS='.'`"
-            else
-              VERSION="`date +'%y.%m.%d'`"
-            fi
+            VERSION="`date +'%y.%m.%d'`"
           fi
 
           if [ -n "${VERSION}" ]; then

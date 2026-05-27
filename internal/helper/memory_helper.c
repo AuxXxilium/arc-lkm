@@ -19,7 +19,7 @@ void set_mem_addr_rw(const unsigned long vaddr, unsigned long len)
 
     //theoretically this should use set_pte_atomic() but we're touching pages that will not be modified by anything else
     unsigned int level;
-    for(; addr <= vaddr; addr += PAGE_SIZE) {
+    for(; addr < vaddr + len; addr += PAGE_SIZE) {
         pte_t *pte = lookup_address(addr, &level);
         pte->pte |= _PAGE_RW;
     }
@@ -35,7 +35,7 @@ void set_mem_addr_ro(const unsigned long vaddr, unsigned long len)
 
     //theoretically this should use set_pte_atomic() but we're touching pages that will not be modified by anything else
     unsigned int level;
-    for(; addr <= vaddr; addr += PAGE_SIZE) {
+    for(; addr < vaddr + len; addr += PAGE_SIZE) {
         pte_t *pte = lookup_address(addr, &level);
         pte->pte &= ~_PAGE_RW;
     }

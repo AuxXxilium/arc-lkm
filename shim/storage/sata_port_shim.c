@@ -33,23 +33,251 @@
 #include "../../common.h"
 #include "../../internal/scsi/scsi_toolbox.h" //scsi_force_replug()
 #include "../../internal/scsi/scsi_notifier.h"
+#include "../../internal/helper/symbol_helper.h" //kln_func
 #include <scsi/scsi_device.h> //struct scsi_device
 #include <scsi/scsi_host.h> //struct Scsi_Host, SYNO_PORT_TYPE_*
+#include <linux/pci.h> //struct pci_dev, to_pci_dev()
 #include "../../config/runtime_config.h"
 #include "../../config/platform_types.h"
 
 #define SHIM_NAME "SATA port emulator"
 #define VIRTIO_HOST_ID "Virtio SCSI HBA"
 
+/* Some kernels/platform headers do not provide struct scsi_device::syno_block_info. */
+#ifdef BLOCK_INFO_SIZE
+#define RP_HAS_SYNO_BLOCK_INFO 1
+#else
+#define RP_HAS_SYNO_BLOCK_INFO 0
+#endif
+
+typedef int (*syno_pciepath_dts_pattern_get_t)(struct pci_dev *pdev, char *buf, int buf_len);
+
+static bool host_uses_libata(const struct Scsi_Host *host);
+#if RP_HAS_SYNO_BLOCK_INFO
+static const char *resolve_syno_pciepath(struct device *pci_dev, char *out_buf, size_t out_len);
+#endif
+
+#if RP_HAS_SYNO_BLOCK_INFO
+static bool resolve_hba_port_no(const struct scsi_device *sdp, unsigned int *out_port_no)
+{
+    struct device *dev;
+    unsigned int host_no;
+    unsigned int port_no;
+
+    if (unlikely(!sdp || !out_port_no))
+        return false;
+
+    /*
+     * For mptsas/mpt3sas topology, parents include nodes like "port-30:4".
+     * The second number is the per-controller port index DSM DT mapping expects.
+     */
+    dev = (struct device *)&sdp->sdev_gendev;
+    while (dev) {
+        const char *name = dev_name(dev);
+
+        if (name && sscanf(name, "port-%u:%u", &host_no, &port_no) == 2) {
+            *out_port_no = port_no;
+            return true;
+        }
+
+        dev = dev->parent;
+    }
+
+    return false;
+}
+#endif
+
+static bool host_has_pci_parent(const struct Scsi_Host *host)
+{
+    struct device *dev;
+
+    if (unlikely(!host))
+        return false;
+
+    dev = host->shost_gendev.parent;
+    while (dev) {
+        if (dev->bus && strcmp(dev->bus->name, "pci") == 0)
+            return true;
+
+        dev = dev->parent;
+    }
+
+    return false;
+}
+
+#if RP_HAS_SYNO_BLOCK_INFO
+static const char *resolve_syno_pciepath(struct device *pci_dev, char *out_buf, size_t out_len)
+{
+    static syno_pciepath_dts_pattern_get_t syno_get_path = NULL;
+    static bool resolver_checked = false;
+
+    if (unlikely(!pci_dev))
+        return "";
+
+    if (!resolver_checked) {
+        unsigned long addr = kln_func ? kln_func("syno_pciepath_dts_pattern_get") : 0;
+
+        if (addr)
+            syno_get_path = (syno_pciepath_dts_pattern_get_t)addr;
+
+        resolver_checked = true;
+    }
+
+    if (syno_get_path && out_buf && out_len > 0) {
+        out_buf[0] = '\0';
+        if (syno_get_path(to_pci_dev(pci_dev), out_buf, (int)out_len) == 0 && out_buf[0] != '\0')
+            return out_buf;
+    }
+
+    return dev_name(pci_dev);
+}
+#endif
+
+/**
+ * Populates sdp->syno_block_info for HBA-backed disks in DT mode.
+ *
+ * Root cause: Synology's sd.c only fills syno_block_info during sd_probe()
+ * for libata/ahci-backed disks (reading from the ata_port structure).
+ * For HBA drivers like mptsas the libata code path never runs, so the field
+ * stays empty.  DSM's DT disks.sh reads syno_block_info (pciepath +
+ * ata_port_no + driver) to assign a physical slot; without it the disk is
+ * invisible in Storage Manager even though the block device exists.
+ *
+ * We derive the values at shim time by walking the device-parent chain to
+ * the PCI device (dev_name() already returns the BDF string) and using the
+ * SCSI target-id as the port/slot index — which matches the ahci ata_port_no
+ * convention that disks.sh expects.
+ *
+ * Note: include <linux/pci.h> so we can call Synology's DTS pciepath helper
+ * when available, falling back to dev_name() BDF format otherwise.
+ */
+#if RP_HAS_SYNO_BLOCK_INFO
+static void populate_syno_block_info_if_needed(struct scsi_device *sdp)
+{
+    struct device *dev;
+    const char *driver_name;
+    const char *syno_driver_name;
+    const char *pciepath;
+    unsigned int ata_port_no;
+    char dts_pciepath[128];
+
+    if (!current_config.hw_config || !current_config.hw_config->is_dt)
+        return;
+
+    /* Only non-libata DT disks need this; libata/ahci hosts already populate it via sd_probe() */
+    if (host_uses_libata(sdp->host) || !host_has_pci_parent(sdp->host))
+        return;
+
+    /*
+     * Never overwrite syno_block_info that the driver (e.g. ahci/libata via sd.c) already
+     * filled in. Without this guard, SATA controllers whose hostt->name isn't in the
+     * host_uses_libata allowlist would have their driver-set syno_block_info replaced with
+     * our approximate values, causing wrong slot assignments and invisible disks in SM.
+     */
+    if (sdp->syno_block_info[0] != '\0')
+        return;
+
+    /* Walk up the device-parent chain until we land on a PCI device */
+    dev = sdp->host->shost_gendev.parent;
+    while (dev) {
+        if (dev->bus && strcmp(dev->bus->name, "pci") == 0)
+            break;
+        dev = dev->parent;
+    }
+
+    if (unlikely(!dev)) {
+        pr_loc_wrn("No PCI parent found for HBA host%d - syno_block_info stays empty",
+                   sdp->host->host_no);
+        return;
+    }
+
+    driver_name = sdp->host->hostt->proc_name;
+    if (!driver_name || !*driver_name)
+        driver_name = sdp->host->hostt->name;
+
+    /*
+     * DT userspace slot mapping is conservative about storage driver names.
+     * For synthetic HBA entries, present the same logical class as onboard SATA
+     * so the disk is accepted by Storage Manager while keeping accurate
+     * pciepath and ata_port_no values.
+     */
+    syno_driver_name = "ahci";
+
+    /*
+     * Prefer explicit HBA port index from topology node name (port-H:P).
+     * Fall back to SCSI target ID if topology does not expose a port node.
+     */
+    ata_port_no = sdp->id;
+    if (!resolve_hba_port_no(sdp, &ata_port_no))
+        pr_loc_dbg("No port-H:P node for /dev/%s; falling back to sdp->id=%u",
+                   sdp->syno_disk_name, sdp->id);
+
+    pciepath = resolve_syno_pciepath(dev, dts_pciepath, sizeof(dts_pciepath));
+
+    /*
+     * Prefer Synology DTS pciepath format when helper symbol is available.
+     * Fall back to PCI BDF (dev_name) to keep compatibility on kernels without that symbol.
+     * Keep the same newline-delimited format used by native ahci/libata paths
+     * so DSM userspace parsers handle these entries consistently.
+     */
+    if (snprintf(sdp->syno_block_info, 128,
+                 "pciepath=%s\nata_port_no=%u\ndriver=%s\n",
+                 pciepath, ata_port_no, syno_driver_name) > 0)
+        pr_loc_dbg("Populated syno_block_info for /dev/%s: pciepath=%s ata_port_no=%u driver=%s (host driver=%s)",
+                   sdp->syno_disk_name, pciepath, ata_port_no,
+                   syno_driver_name, driver_name ? driver_name : "scsi");
+    else
+        pr_loc_wrn("snprintf failed for syno_block_info /dev/%s", sdp->syno_disk_name);
+}
+#else
+static void populate_syno_block_info_if_needed(struct scsi_device *sdp)
+{
+    (void)sdp;
+}
+#endif
+
+static bool host_uses_libata(const struct Scsi_Host *host)
+{
+    if (unlikely(!host || !host->hostt || !host->hostt->name))
+        return false;
+
+    const char *name = host->hostt->name;
+
+    return strcmp(name, "ahci") == 0 ||
+           strcmp(name, "ahci_platform") == 0 ||
+           strcmp(name, "ata_piix") == 0 ||
+           strcmp(name, "libata") == 0 ||
+           strncmp(name, "sata_", 5) == 0 ||
+           strncmp(name, "pata_", 5) == 0;
+}
+
 /**
  * Checks if we should fix a given device or ignore it
  */
 static bool is_fixable(struct scsi_device *sdp)
 {
-    return current_config.hw_config->is_dt == false &&    // Device-tree models causes a kernel panic if type is changed
-        (sdp->host->hostt->syno_port_type == SYNO_PORT_TYPE_SAS ||
-           (sdp->host->hostt->syno_port_type != SYNO_PORT_TYPE_SATA &&
-            strcmp(sdp->host->hostt->name, VIRTIO_HOST_ID) == 0));
+    if (unlikely(!sdp || !sdp->host || !sdp->host->hostt))
+        return false;
+
+    const char *host_name = sdp->host->hostt->name;
+    const bool uses_libata = host_uses_libata(sdp->host);
+    const bool non_sata_port = sdp->host->hostt->syno_port_type != SYNO_PORT_TYPE_SATA;
+    const bool is_sas_port = sdp->host->hostt->syno_port_type == SYNO_PORT_TYPE_SAS;
+    const char *proc_name = sdp->host->hostt->proc_name;
+    const bool is_virtio_host = (host_name && strcmp(host_name, VIRTIO_HOST_ID) == 0) ||
+                                (proc_name && strcmp(proc_name, "virtio_scsi") == 0);
+    const bool is_pci_attached_scsi = !uses_libata && host_has_pci_parent(sdp->host);
+
+    // Old known-good behavior for non-DT models.
+    if (likely(current_config.hw_config && !current_config.hw_config->is_dt)) {
+        return (is_sas_port || (non_sata_port && is_virtio_host));
+    }
+
+    // DT safety mode: do not touch libata/native SATA; allow old SAS/VirtIO behavior plus generic PCI SCSI hosts.
+    if (uses_libata || !(is_sas_port || is_virtio_host || is_pci_attached_scsi))
+        return false;
+
+    return true;
 }
 
 /**
@@ -102,16 +330,29 @@ static int on_existing_scsi_disk_device(struct scsi_device *sdp)
  */
 static int scsi_disk_probe_handler(struct notifier_block *self, unsigned long state, void *data)
 {
-    if (state != SCSI_EVT_DEV_PROBING)
-        return NOTIFY_DONE;
+    if (state == SCSI_EVT_DEV_PROBING) {
+        on_new_scsi_disk_device(data);
+        return NOTIFY_OK;
+    }
 
-    on_new_scsi_disk_device(data);
-    return NOTIFY_OK;
+    /*
+     * SCSI_EVT_DEV_PROBED_OK fires after sd_probe() returns successfully.
+     * By this point sd.c has set syno_disk_name and populated syno_block_info
+     * for libata/ahci disks.  For HBA disks (mptsas, mpt3sas, etc.) sd.c
+     * leaves syno_block_info empty; we fill it here so disks.sh DT slot
+     * mapping can assign these disks to physical slots.
+     */
+    if (state == SCSI_EVT_DEV_PROBED_OK) {
+        populate_syno_block_info_if_needed(data);
+        return NOTIFY_OK;
+    }
+
+    return NOTIFY_DONE;
 }
 
 static struct notifier_block scsi_disk_nb = {
     .notifier_call = scsi_disk_probe_handler,
-    .priority = INT_MIN, //we want to be FIRST so that we other things can get the correct drive type
+    .priority = INT_MIN, //run late so prior notifiers can observe/adjust original values first
 };
 
 int register_sata_port_shim(void)

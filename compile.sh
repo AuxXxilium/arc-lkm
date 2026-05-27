@@ -20,10 +20,6 @@ function makeEnvDeploy() {
   mkdir -p "${ROOT_PATH}"
   if [ ! -d "${ROOT_PATH}/pkgscripts-ng" ]; then
     git clone https://github.com/SynologyOpenSource/pkgscripts-ng.git ${ROOT_PATH}/pkgscripts-ng
-    #git clone https://${TOKEN:+${TOKEN}@}github.com/RROrg/pkgscripts-ng.git ${ROOT_PATH}/pkgscripts-ng
-    #if echo "geminilakenk r1000nk v1000nk" | grep -wq "${PLATFORM}"; then
-    #  sudo "${ROOT_PATH}/pkgscripts-ng/maketoolkit.sh" "${PLATFORM}" "${VERSION}" "${ROOT_PATH}/toolkit_tarballs"
-    #fi
   fi
   pushd "${ROOT_PATH}/pkgscripts-ng" || exit 1
   git reset --hard
@@ -38,11 +34,6 @@ function makeEnvDeploy() {
 
   ENV_PATH="${ROOT_PATH}/build_env/ds.${PLATFORM}-${VERSION}"
   sudo cp -al "${ROOT_PATH}/pkgscripts-ng" "${ENV_PATH}/"
-
-  # # Fault tolerance of pkgscripts-ng
-  # if [ "${PLATFORM}" == "broadwellntbap" ] && [ "${VERSION}" == "7.1" ]; then
-  #   sudo sed -i '/		broadwellnk	BROADWELLNK/a\		broadwellntbap  BROADWELLNTBAP                  linux-4.4.x             Intel Broadwell with ntb kernel config in AP mode' ${ENV_PATH}/pkgscripts-ng/include/platforms
-  # fi
 
   sudo rm -f script.sh
   cat >script.sh <<"EOF"

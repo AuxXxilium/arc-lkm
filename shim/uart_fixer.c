@@ -27,6 +27,8 @@ static int noinline uart_swap_hw_output(unsigned int from, unsigned char to)
 
 static bool ttyS0_force_initted = false; //Was ttyS0 forcefully initialized by us?
 static bool serial_swapped = false; //Whether ttyS0 and ttyS1 were swapped
+static unsigned long ttyS0_iobase = STD_COM1_IOBASE;
+static unsigned int ttyS0_irq = STD_COM1_IRQ;
 
 /**
  * On some platforms (e.g. 918+) the first serial port appears to not be functional as it's not initialized properly.
@@ -40,9 +42,9 @@ static int fix_muted_ttyS0(void)
 {
     int out = 0;
     struct uart_port port = {
-        .iobase = STD_COM1_IOBASE,
+        .iobase = ttyS0_iobase,
         .uartclk = STD_COMX_BAUD * 16,
-        .irq = STD_COM1_IRQ,
+        .irq = ttyS0_irq,
         .flags = STD_COMX_FLAGS
     };
 
@@ -67,11 +69,14 @@ static int mute_ttyS0(void)
     return 0;
 }
 
-int register_uart_fixer(const hw_config_uart_fixer *hw)
+int register_uart_fixer(const hw_config_uart_fixer *hw, const uart_runtime_config_uart_fixer *uart_config)
 {
     shim_reg_in();
 
     int out = 0;
+    ttyS0_iobase = uart_config ? uart_config->ttyS0_iobase : STD_COM1_IOBASE;
+    ttyS0_irq = uart_config ? uart_config->ttyS0_irq : STD_COM1_IRQ;
+
     if (
             (hw->swap_serial && (out = uart_swap_hw_output(1, 0)) != 0) ||
             (hw->reinit_ttyS0 && (out = fix_muted_ttyS0()) != 0)

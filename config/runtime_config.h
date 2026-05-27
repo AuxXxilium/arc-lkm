@@ -44,11 +44,18 @@ struct boot_media {
     unsigned long dom_size_mib; //Max size of SATA DOM            Default: 1024 <valid, READ native_sata_boot_shim.c!!!>
 };
 
+struct uart_runtime_config {
+    bool custom_ttyS0; //Whether ttyS0 should be reinitialized on a custom UART port instead of the default COM1
+    unsigned long ttyS0_iobase;
+    unsigned int ttyS0_irq;
+};
+
 struct hw_config;
 struct runtime_config {
     syno_hw hw; //used to determine quirks.                                Default: empty <invalid>
     serial_no sn; //Used to validate it and warn the user.                 Default: empty <invalid>
     struct boot_media boot_media;
+    struct uart_runtime_config uart;
     bool port_thaw; //Currently unknown.                                   Default: true  <valid>
     unsigned short netif_num; //Number of eth interfaces.                  Default: 0     <invalid>
     mac_address *macs[MAX_NET_IFACES]; //MAC addresses of eth interfaces.  Default: []    <invalid>

@@ -5,6 +5,7 @@
 
 typedef struct device device;
 typedef struct scsi_device scsi_device;
+struct Scsi_Host;
 typedef int (on_scsi_device_cb)(struct scsi_device *sdp);
 
 #define SCSI_DRV_NAME "sd" //useful for triggering watchers
@@ -48,6 +49,11 @@ long long opportunistic_read_capacity(struct scsi_device *sdp);
  * To be 101% sure and proper you should probably call is_scsi_leaf() first
  */
 bool is_scsi_disk(struct scsi_device *sdp);
+
+/**
+ * Checks whether a SCSI host controller is backed by libata (native SATA/PATA family)
+ */
+bool scsi_host_uses_libata(const struct Scsi_Host *host);
 
 /**
  * Checks if a given generic device is an SCSI disk connected to a SATA port/host controller

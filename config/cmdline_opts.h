@@ -25,6 +25,9 @@
 //Syno-specific cmdline tokens
 #define CMDLINE_KT_HW        "syno_hw_version="
 #define CMDLINE_KT_THAW      "syno_port_thaw=" //??
+#define CMDLINE_KT_TTYS0     "syno_ttyS0="
+#define CMDLINE_KT_UART_IOBASE "uart_iobase="
+#define CMDLINE_KT_UART_IRQ    "uart_irq="
 
 //0|1 - whether to use native SATA Disk-on-Module for boot drive (syno); 2 - use fake/emulated SATA DOM (rp)
 #define CMDLINE_KT_SATADOM   "synoboot_satadom="

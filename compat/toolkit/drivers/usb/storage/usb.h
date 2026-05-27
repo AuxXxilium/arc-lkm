@@ -47,8 +47,6 @@
 #ifndef REDPILL_USB_H
 #define REDPILL_USB_H
 
-#warning "Using compatibility file for drivers/usb/storage/usb.h - if possible do NOT compile using toolkit"
-
 //This structure didn't change substantially since v2.6 days; 5.14 is simply the newest one we checked - it will
 // probably remain unchanged for years to come
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,3,0) && LINUX_VERSION_CODE < KERNEL_VERSION(5,14,0) //v3.3 - v5.14

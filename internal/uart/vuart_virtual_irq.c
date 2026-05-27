@@ -108,7 +108,7 @@ retry:
         pr_loc_bug("Failed to start vIRQ thread");
         goto error_free;
     }
-    pr_loc_dbg("vIRQ fully enabled for for ttyS%d", vdev->line);
+    pr_loc_dbg("vIRQ fully enabled for ttyS%d", vdev->line);
 
     return 0;
 

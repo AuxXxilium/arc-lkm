@@ -12,23 +12,56 @@ function compile-module {
     strip -g "${F}"
     echo "Copying `basename ${F}`"
     cp "${F}" "/output"
-    chown 1000.1000 "/output/`basename ${F}`"
+    chown 1000:1000 "/output/`basename ${F}`"
   done < <(find /tmp/input -name \*.ko)
 }
 
 ###############################################################################
 
 function compile-lkm {
+  local platform="$1"
+  local target="$2"
+  local kernel_src="${LINUX_SRC}"
+  local nested_build=""
+
+  if [ -z "${platform}" ] || [ -z "${target}" ]; then
+    echo "Use: compile-lkm <platform> <dev|prod>"
+    return 1
+  fi
+
+  if [ "${target}" != "dev" ] && [ "${target}" != "prod" ]; then
+    echo "Invalid target: ${target} (expected dev or prod)"
+    return 1
+  fi
+
+  # Some images export platform-scoped kernel paths (/opt/<platform>/build).
+  # Prefer them when available, otherwise keep the generic DSM toolkit path.
+  if [ -d "/opt/${platform}/build" ]; then
+    kernel_src="/opt/${platform}/build"
+  else
+    # Newer images may keep build under an extra DSM-* directory.
+    nested_build=$(find "/opt/${platform}" -maxdepth 6 -type d -name build 2>/dev/null | head -n 1)
+    if [ -n "${nested_build}" ] && [ -d "${nested_build}" ]; then
+      kernel_src="${nested_build}"
+    fi
+  fi
+
+  if [ ! -d "${kernel_src}" ]; then
+    echo "Kernel source path not found: ${kernel_src}"
+    echo "Known toolkit paths:"
+    ls -d /usr/local/x86_64-pc-linux-gnu/x86_64-pc-linux-gnu/sys-root/usr/lib/modules/*/build 2>/dev/null || true
+    ls -d /opt/*/build 2>/dev/null || true
+    ls -d /opt/*/*/build 2>/dev/null || true
+    ls -d /opt/*/*/*/build 2>/dev/null || true
+    return 1
+  fi
+
   cp -R /input /tmp
-  make -C "/tmp/input" dev-v7
+  LINUX_SRC="${kernel_src}" KSRC="${kernel_src}" make -C "/tmp/input" clean
+  PLATFORM="${platform}" LINUX_SRC="${kernel_src}" KSRC="${kernel_src}" make -C "/tmp/input" "${target}-v7"
   strip -g "/tmp/input/redpill.ko"
-  mv "/tmp/input/redpill.ko" "/output/redpill-dev.ko"
-  chown 1000.1000 /output/redpill-dev.ko
-  make -C "/tmp/input" clean
-  make -C "/tmp/input" prod-v7
-  strip -g "/tmp/input/redpill.ko"
-  mv "/tmp/input/redpill.ko" "/output/redpill-prod.ko"
-  chown 1000.1000 /output/redpill-prod.ko
+  mv "/tmp/input/redpill.ko" "/output/redpill.ko"
+  chown 1000:1000 /output/redpill.ko
 }
 
 ###############################################################################
@@ -38,6 +71,19 @@ if [ $# -lt 1 ]; then
   echo "Commands: shell | compile-module | compile-lkm"
   exit 1
 fi
+
+if [ -z "${TOOLKIT_VER}" ]; then
+  DETECTED_DSM_BUILD=$(ls -d /usr/local/x86_64-pc-linux-gnu/x86_64-pc-linux-gnu/sys-root/usr/lib/modules/DSM-*/build 2>/dev/null | head -n 1)
+  if [ -n "${DETECTED_DSM_BUILD}" ]; then
+    TOOLKIT_VER=$(basename "$(dirname "${DETECTED_DSM_BUILD}")" | sed 's/^DSM-//')
+  fi
+fi
+
+if [ -z "${TOOLKIT_VER}" ]; then
+  echo "TOOLKIT_VER is not set and could not be auto-detected"
+  exit 1
+fi
+
 export PATH="${PATH}:/usr/local/x86_64-pc-linux-gnu/bin"
 export KSRC="/usr/local/x86_64-pc-linux-gnu/x86_64-pc-linux-gnu/sys-root/usr/lib/modules/DSM-${TOOLKIT_VER}/build"
 export LINUX_SRC="/usr/local/x86_64-pc-linux-gnu/x86_64-pc-linux-gnu/sys-root/usr/lib/modules/DSM-${TOOLKIT_VER}/build"
@@ -52,6 +98,6 @@ export LD="x86_64-pc-linux-gnu-ld"
 case $1 in
   shell) shift && bash -l $@ ;;
   compile-module) compile-module ;;
-  compile-lkm) compile-lkm ;;
+  compile-lkm) shift && compile-lkm "$@" ;;
   *) echo "Command not recognized: $1" ;;
 esac

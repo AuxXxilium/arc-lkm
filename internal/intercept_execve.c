@@ -33,7 +33,7 @@
 #include "../debug/debug_execve.h"
 #endif
 
-#define MAX_INTERCEPTED_FILES 10
+#define MAX_INTERCEPTED_FILES 16
 
 static char * intercepted_filenames[MAX_INTERCEPTED_FILES] = { NULL };
 
@@ -45,8 +45,8 @@ int add_blocked_execve_filename(const char *filename)
     unsigned int idx = 0;
     while (likely(intercepted_filenames[idx])) { //Find free spot
         if (unlikely(strcmp(filename, intercepted_filenames[idx]) == 0)) { //Does it exist already?
-            pr_loc_bug("File %s was already added at %d", filename, idx);
-            return -EEXIST;
+            pr_loc_wrn("File %s was already added at %d, skipping duplicate", filename, idx);
+            return 0;
         }
 
         if(unlikely(++idx >= MAX_INTERCEPTED_FILES)) { //Are we out of indexes?
@@ -103,6 +103,7 @@ SYSCALL_SHIM_DEFINE3(execve,
 }
 
 static override_symbol_inst *sys_execve_ovs = NULL;
+
 int register_execve_interceptor()
 {
     pr_loc_dbg("Registering execve() interceptor");
@@ -202,7 +203,6 @@ static struct ftrace_hook hooks[] = {
     HOOK("__x64_sys_execve", hook_execve, &orig_execve),
 };
 
-static override_symbol_inst *sys_execve_ovs = NULL;
 int register_execve_interceptor()
 {
     pr_loc_dbg("Registering execve() interceptor");

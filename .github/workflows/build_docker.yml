@@ -25,6 +25,9 @@ on:
 
 jobs:
   build:
+    strategy:
+      matrix:
+        version: ${{ fromJSON(inputs.version != '' && format('["{0}"]', inputs.version) || '["7.2", "7.3", "7.4"]') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -40,7 +43,27 @@ jobs:
       - name: Build LKMs
         run: |
           chmod +x ./build-lkm.sh
-          ./build-lkm.sh --all
+          ./build-lkm.sh -v ${{ matrix.version }}
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rp-lkms-${{ matrix.version }}
+          path: |
+            ${{ github.workspace }}/releases/*
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ github.workspace }}/rp-lkms
 
       - name: Calculate Version
         run: |
@@ -49,12 +72,7 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           else
-            LATEST_TAG="$(curl -skL "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r ".tag_name" 2>/dev/null)"
-            if [[ -n "${LATEST_TAG}" && "`echo ${LATEST_TAG} | cut -d '.' -f 1,2,3`" = "`date +'%y.%m.%d'`" ]]; then
-              VERSION="`echo ${LATEST_TAG} | awk -F '.' '{$4=$4+1}1' OFS='.'`"
-            else
-              VERSION="`date +'%y.%m.%d'`"
-            fi
+            VERSION="`date +'%y.%m.%d'`"
           fi
 
           if [ -n "${VERSION}" ]; then
@@ -66,14 +84,16 @@ jobs:
         if: env.VERSION != ''
         run: |
           # Update VERSION file with release version
-          echo "${{ env.VERSION }}" > releases/VERSION
+          echo "${{ env.VERSION }}" > ${{ github.workspace }}/rp-lkms/VERSION
 
       - name: Create Release Zip
         if: env.VERSION != ''
         run: |
-          cd releases
-          zip -j9 ../rp-lkms.zip *
-          ls -lh ../rp-lkms.zip
+          cd ${{ github.workspace }}/rp-lkms
+          rm -f ../rp-lkms.zip
+          find . -type f -name "*.gz" -print0 | xargs -0 -r zip -j9 ../rp-lkms.zip
+          zip -j9 ../rp-lkms.zip VERSION
+          ls -lh ${{ github.workspace }}/rp-lkms.zip
 
       - name: Release
         if: success() && env.VERSION != ''

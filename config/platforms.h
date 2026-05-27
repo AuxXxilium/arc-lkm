@@ -372,7 +372,7 @@ const struct hw_config platformConfig = {
         .psu_status = {HWMON_PSU_NULL_ID},
         .sys_current = {HWMON_SYS_CURR_NULL_ID},
     }};
-#elif defined(RP_PLATFORM_EPYC7002)
+#elif defined(RP_PLATFORM_EPYC7002) || defined(RP_PLATFORM_EPYC7003NTB)
 const struct hw_config platformConfig = {
     .name = "", // "SA6400",
     .pci_stubs = {

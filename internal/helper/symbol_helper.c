@@ -47,7 +47,7 @@ static unsigned long kaddr_lookup_name(const char *fname_raw)
     /*
      * Get the kernel base address:
      * sprint_symbol() is less than 0x100000 from the start of the kernel, so
-     * we can just AND-out the last 3 bytes from it's address to the the base
+     * we can just AND-out the last 3 bytes from it's address to the base
      * address.
      * There might be a better symbol-name to use?
      */
