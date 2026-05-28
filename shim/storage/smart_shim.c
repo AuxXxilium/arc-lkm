@@ -86,7 +86,7 @@
 #include "../../internal/scsi/hdparam.h" //a ton of ATA constants
 #include "../../internal/scsi/scsi_toolbox.h" //checking for "sd" driver load state
 #include "../../internal/override/override_symbol.h" //installing sd_ioctl_canary()
-#include "scsi_disk_serial.h" // rp_fetch_block_serial()
+#include "scsi_disk_serial.h" // rp_fetch_block_serial(), rp_fetch_block_temp()
 #include <linux/fs.h> //struct block_device
 #include <linux/genhd.h> //struct gendisk
 #include <linux/blkdev.h> //struct block_device_operations
@@ -307,6 +307,12 @@ static int populate_ata_id(const u8 *req_header, void __user *buff_ptr, const ch
     did->csf_default = (1 << 14 | 1 << 1 | 1 << 0); //"shall be one" ; SMART self-test, SMART error-test
     did->hw_config = (1 << 14 | 1 << 0); //both "shall be one"
     did->lba_capacity = 0xffffffff; //maybe we can get away with not reading capacity?
+    /* Word 206: declare SCT Command Transport + Data Tables support.
+     * DSM reads this to set /run/synostorage/disks/$dev/sct_cmd_support.
+     * With sct_cmd_support=1 DSM issues SCT temperature reads; on SAT-capable
+     * HBAs these succeed natively.  If SCT fails, DSM falls back to SMART
+     * attribute 190/194 which we provide via LOG SENSE injection. */
+    did->words206_254[ATA_ID_SCT_CMD_TRANSPORT] = ATA_ID_SCT_SUPPORTED | ATA_ID_SCT_DATA_TABLES;
 
     ata_calc_integrity_word((void *)did);
 
@@ -394,7 +400,7 @@ static int handle_ata_cmd_identify(int org_ioctl_exec_result, const u8 *req_head
  * @return 0 on success, -EIO on unexpected call, -ENOMEM when memory reservation fails, or -EFAULT when data fails to
  *         copy to user buffer
  */
-static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr, bool include_temp)
+static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr, int disk_temp)
 {
     pr_loc_dbg("Generating fake SMART values");
 
@@ -424,12 +430,16 @@ static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr
 
     //copy ALL attribute bytes as we were asked for everything (including thresholds)
     for (i = 0; i < ARRAY_SIZE(fake_smart); i++) {
-        if (!include_temp && is_fake_temp_attr(fake_smart[i][0]))
+        if (disk_temp < 0 && is_fake_temp_attr(fake_smart[i][0]))
             continue;
 
         for (j = 0; j < 11; j++) {
             smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + j] = fake_smart[i][j];
         }
+
+        /* inject real temperature into raw[0] (byte 5 of the attribute record) */
+        if (disk_temp >= 0 && is_fake_temp_attr(fake_smart[i][0]))
+            smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 5] = (u8)disk_temp;
 
         ++attr_idx;
     }
@@ -467,7 +477,7 @@ static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr
  * @return 0 on success, -EIO on unexpected call, -ENOMEM when memory reservation fails, or -EFAULT when data fails to
  *         copy to user buffer
  */
-static int populate_ata_smart_thresholds(const u8 *req_header, void __user *buff_ptr, bool include_temp)
+static int populate_ata_smart_thresholds(const u8 *req_header, void __user *buff_ptr, int disk_temp)
 {
     pr_loc_dbg("Generating fake SMART thresholds");
 
@@ -497,7 +507,7 @@ static int populate_ata_smart_thresholds(const u8 *req_header, void __user *buff
 
     //copy a subset of attribute bytes as we were asked for thresholds only
     for (i = 0; i < ARRAY_SIZE(fake_smart); i++) {
-        if (!include_temp && is_fake_temp_attr(fake_smart[i][0]))
+        if (disk_temp < 0 && is_fake_temp_attr(fake_smart[i][0]))
             continue;
 
         smart_thresholds[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 0] = fake_smart[i][0]; //entry id
@@ -662,16 +672,16 @@ static int populate_win_smart_exec_test(const u8 *req_header, void __user *buff_
  * @return 0 on success, -EIO on unexpected call, -ENOMEM when memory reservation fails, or -EFAULT when data fails to
  *         copy to user buffer
  */
-static int __always_inline handle_ata_cmd_smart(const u8 *req_header, void __user *buff_ptr, bool include_temp)
+static int __always_inline handle_ata_cmd_smart(const u8 *req_header, void __user *buff_ptr, int disk_temp)
 {
     pr_loc_dbg("Got SMART *command* - looking for feature=0x%x", req_header[HDIO_DRIVE_CMD_HDR_FEATURE]);
 
     switch (req_header[HDIO_DRIVE_CMD_HDR_FEATURE]) {
         case ATA_SMART_READ_VALUES: //read all SMART values snapshot
-            return populate_ata_smart_values(req_header, buff_ptr, include_temp);
+            return populate_ata_smart_values(req_header, buff_ptr, disk_temp);
 
         case ATA_SMART_READ_THRESHOLDS: //read all SMART thresholds snapshot
-            return populate_ata_smart_thresholds(req_header, buff_ptr, include_temp);
+            return populate_ata_smart_thresholds(req_header, buff_ptr, disk_temp);
 
         case ATA_SMART_ENABLE: //enable previously disabled SMART support
             pr_loc_wrn("Attempted ATA_SMART_ENABLE modification!");\
@@ -735,7 +745,18 @@ static int handle_hdio_drive_cmd_ioctl(struct block_device *bdev, fmode_t mode, 
         //this command asks directly for the SMART data of the drive and will fail on drives with no real SMART support
         case ATA_CMD_SMART: //if the drive supports SMART it will just return the data as-is, no need to proxy
             pr_loc_dbg_ioctl(cmd, "ATA_CMD_SMART", bdev);
-            return (ioctl_out == 0) ? 0 : handle_ata_cmd_smart(req_header, buff_ptr, false);
+            if (ioctl_out == 0)
+                return 0;
+            {
+                /* For HBA disks the ATA SMART ioctl fails but the drive may still expose temperature via SCSI LOG
+                 * SENSE (Temperature page 0x0D).  Try to read the real temperature so DSM can display it instead
+                 * of hiding the attribute entirely. */
+                int disk_temp = rp_fetch_block_temp(bdev->bd_disk->disk_name);
+                if (disk_temp >= 0)
+                    pr_loc_dbg("HBA disk /dev/%s: injecting real temperature %d\u00b0C into fake SMART",
+                               bdev->bd_disk->disk_name, disk_temp);
+                return handle_ata_cmd_smart(req_header, buff_ptr, disk_temp);
+            }
 
         //We're only interested in a subset of commands - rest are simply redirected back
         default:

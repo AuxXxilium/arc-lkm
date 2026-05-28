@@ -244,3 +244,55 @@ int for_each_scsi_disk(on_scsi_device_cb *cb)
 {
     return for_each_scsi_x(cb, for_each_scsi_disk_filter);
 }
+
+/*
+ * Temperature log page (SPC-4, 7.3.13). The page header is 4 bytes, followed
+ * by one or more log parameters. Parameter 0x0000 (Current Temperature) has
+ * its value at byte offset 9 in the raw response.
+ */
+#define SCSI_LOG_PAGE_TEMP      0x0D
+#define SCSI_LOG_TEMP_ALLOC     16
+#define SCSI_LOG_TEMP_BYTE      9
+#define SCSI_TEMP_UNAVAILABLE   0xFF
+
+/**
+ * Reads the current temperature of a SCSI device via LOG SENSE (Temperature page 0x0D)
+ *
+ * @param sdp SCSI device pointer
+ * @return temperature in Celsius on success, -ENODATA if the drive reports it as unavailable,
+ *         or -EIO if the LOG SENSE command itself failed
+ */
+int scsi_read_disk_temp(struct scsi_device *sdp)
+{
+    unsigned char cmd[10] = {0};
+    unsigned char buf[SCSI_LOG_TEMP_ALLOC] = {0};
+    struct scsi_sense_hdr sshdr;
+    int ret;
+
+    cmd[0] = LOG_SENSE;                              /* 0x4D */
+    cmd[2] = 0x40 | SCSI_LOG_PAGE_TEMP;             /* PC=01 (cumulative values), page=0x0D */
+    cmd[8] = SCSI_LOG_TEMP_ALLOC;                   /* allocation length */
+
+    ret = scsi_execute_req(sdp, cmd, DMA_FROM_DEVICE, buf, SCSI_LOG_TEMP_ALLOC, &sshdr,
+                           SCSI_CMD_TIMEOUT, SCSI_CMD_MAX_RETRIES, NULL);
+    if (ret != 0) {
+        pr_loc_dbg("LOG SENSE temp page failed for /dev/%s (host%d) - err=%d",
+                   sdp->syno_disk_name, sdp->host->host_no, ret);
+        return -EIO;
+    }
+
+    if ((buf[0] & 0x3f) != SCSI_LOG_PAGE_TEMP) {
+        pr_loc_dbg("LOG SENSE returned unexpected page 0x%02x (expected 0x%02x) for /dev/%s",
+                   buf[0] & 0x3f, SCSI_LOG_PAGE_TEMP, sdp->syno_disk_name);
+        return -ENODATA;
+    }
+
+    u8 temp = buf[SCSI_LOG_TEMP_BYTE];
+    if (temp == SCSI_TEMP_UNAVAILABLE) {
+        pr_loc_dbg("LOG SENSE temperature not available (0xFF) for /dev/%s", sdp->syno_disk_name);
+        return -ENODATA;
+    }
+
+    pr_loc_dbg("LOG SENSE temperature=%d\u00b0C for /dev/%s", (int)temp, sdp->syno_disk_name);
+    return (int)temp;
+}

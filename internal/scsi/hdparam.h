@@ -66,6 +66,11 @@
 #define ATA_ID_CFS_ENABLE_1_SMART 0x01 //first bit of command set #1 contains SMART enable flag
 #define ATA_ID_CSF_DEFAULT_VALID 0x4000 //14th bit with should always be 1 when disk supports that
 
+// Word 206: SCT Command Transport (ATA/ATAPI-7 vol.1 sec. 4.18.6.31)
+#define ATA_ID_SCT_CMD_TRANSPORT    0 //index into words206_254[]
+#define ATA_ID_SCT_SUPPORTED        (1 << 0) //SCT Command Transport supported
+#define ATA_ID_SCT_DATA_TABLES      (1 << 5) //SCT Data Tables (needed for SCT temperature reads)
+
 /************************************************* ATA IDENTIFY macros ************************************************/
 //These can be used with ATA IDENTIFY data returned by HDIO_GET_IDENTITY or HDIO_DRIVE_CMD=>ATA_CMD_IDENTIFY_DEV with
 // when buffer is corrected by HDIO_DRIVE_CMD_HDR_OFFSET (to move over the header data)

@@ -82,8 +82,8 @@ retry:
     }
 
     // by jim3ma: fix kernel warning log "BUG: sleeping function called from invalid context at mm/slab.h"
-    if (!(vdev->virq_queue = kmalloc(sizeof(wait_queue_head_t), GFP_ATOMIC)) ||
-        !(vdev->virq_thread = kmalloc(sizeof(struct task_struct), GFP_ATOMIC))) {
+    // Only virq_queue needs to be allocated; virq_thread is a kernel task_struct managed by kthread_run()
+    if (!(vdev->virq_queue = kmalloc(sizeof(wait_queue_head_t), GFP_ATOMIC))) {
         if (kmc == 10) {
             out = -ENOMEM;
             pr_loc_crt("kernel memory alloc failure - tried to reserve memory for vIRQ structures");
@@ -98,16 +98,18 @@ retry:
     init_waitqueue_head(vdev->virq_queue);
     unlock_vuart(vdev); //we can safely unlock after reserving memory but before starting thread (so we're not atomic)
 
+    struct task_struct *t;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-extra-args"
     //VUART_THREAD_FMT can resolve to anonymized version without line or even IRQ#
-    vdev->virq_thread = kthread_run(virq_thread, vdev, VUART_THREAD_FMT, vdev->irq, vdev->line);
+    t = kthread_run(virq_thread, vdev, VUART_THREAD_FMT, vdev->irq, vdev->line);
 #pragma GCC diagnostic pop
-    if (IS_ERR(vdev->virq_thread)) {
-        out = PTR_ERR(vdev->virq_thread);
+    if (IS_ERR(t)) {
+        out = PTR_ERR(t);
         pr_loc_bug("Failed to start vIRQ thread");
         goto error_free;
     }
+    vdev->virq_thread = t;
     pr_loc_dbg("vIRQ fully enabled for ttyS%d", vdev->line);
 
     return 0;
@@ -119,10 +121,6 @@ error_free:
     if (vdev->virq_queue) {
         kfree(vdev->virq_queue);
         vdev->virq_queue = NULL;
-    }
-    if (vdev->virq_thread) {
-        kfree(vdev->virq_thread);
-        vdev->virq_thread = NULL;
     }
     return out;
 }
@@ -151,8 +149,11 @@ int vuart_disable_interrupts(struct serial8250_16550A_vdev *vdev)
         goto out_unlock;
     }
 
-    kfree(vdev->virq_thread);
+    // virq_thread is a kernel task_struct; kthread_stop() releases it — do not kfree
     vdev->virq_thread = NULL;
+    // virq_queue was kmalloc'd by vuart_enable_interrupts; free it here
+    kfree(vdev->virq_queue);
+    vdev->virq_queue = NULL;
     pr_loc_dbg("vIRQ disabled for ttyS%d", vdev->line);
 
     out_unlock:

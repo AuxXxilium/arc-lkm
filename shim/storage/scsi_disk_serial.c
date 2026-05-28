@@ -85,6 +85,13 @@ static int find_matching_fwrev(struct scsi_device *sdp, struct fwrev_lookup_ctx 
 static struct serial_lookup_ctx *lookup_ctx;
 static struct fwrev_lookup_ctx *fwrev_lookup_ctx;
 
+struct temp_lookup_ctx {
+    const char *blk_name;
+    int temp;
+    bool found;
+};
+static struct temp_lookup_ctx *temp_lookup_ctx;
+
 static int find_matching_serial_thunk(struct scsi_device *sdp)
 {
     return find_matching_serial(sdp, lookup_ctx);
@@ -93,6 +100,15 @@ static int find_matching_serial_thunk(struct scsi_device *sdp)
 static int find_matching_fwrev_thunk(struct scsi_device *sdp)
 {
     return find_matching_fwrev(sdp, fwrev_lookup_ctx);
+}
+
+static int find_and_read_temp_thunk(struct scsi_device *sdp)
+{
+    if (strcmp(temp_lookup_ctx->blk_name, sdp->syno_disk_name) != 0)
+        return 0;
+    temp_lookup_ctx->found = true;
+    temp_lookup_ctx->temp = scsi_read_disk_temp(sdp);
+    return 1; /* stop iteration */
 }
 
 const char *rp_fetch_block_serial(const char *blk_name)
@@ -144,4 +160,29 @@ bool rp_fetch_block_fwrev(const char *blk_name, char *fw_rev_out, size_t fw_rev_
     }
 
     return ctx.found;
+}
+
+int rp_fetch_block_temp(const char *blk_name)
+{
+    struct temp_lookup_ctx ctx = {
+        .blk_name = blk_name,
+        .temp = -ENODATA,
+        .found = false,
+    };
+    int out;
+
+    if (unlikely(!blk_name || blk_name[0] == '\0'))
+        return -EINVAL;
+
+    temp_lookup_ctx = &ctx;
+    out = for_each_scsi_disk(find_and_read_temp_thunk);
+    temp_lookup_ctx = NULL;
+
+    // for_each_scsi_disk() returns first non-zero callback code; positive code here means "match found".
+    if (unlikely(out < 0 && out != -ENXIO)) {
+        pr_loc_err("Failed to enumerate SCSI disks while reading temp for /dev/%s - error=%d", blk_name, out);
+        return -EIO;
+    }
+
+    return ctx.found ? ctx.temp : -ENODATA;
 }

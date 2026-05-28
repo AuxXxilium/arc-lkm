@@ -103,4 +103,12 @@ int for_each_scsi_leaf(on_scsi_device_cb *cb);
  */
 int for_each_scsi_disk(on_scsi_device_cb *cb);
 
+/**
+ * Reads the current temperature of a SCSI device via LOG SENSE (Temperature page 0x0D)
+ *
+ * @param sdp SCSI device pointer
+ * @return temperature in Celsius (>= 0) on success, -ENODATA if not available, -EIO on command failure
+ */
+int scsi_read_disk_temp(struct scsi_device *sdp);
+
 #endif //REDPILL_SCSI_TOOLBOX_H
