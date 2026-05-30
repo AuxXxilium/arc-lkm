@@ -268,7 +268,12 @@ static bool is_fixable(struct scsi_device *sdp)
                                 (proc_name && strcmp(proc_name, "virtio_scsi") == 0);
     const bool is_pci_attached_scsi = !uses_libata && host_has_pci_parent(sdp->host);
 
-    // Old known-good behavior for non-DT models.
+    // Non-DT models: fix SAS-type ports and VirtIO SCSI only.  This matches 25.11.26 behaviour.
+    // is_pci_attached_scsi is intentionally excluded here: on non-DT, DSM uses the internalportcfg
+    // bitmask (set by nondtModel in disks.sh) to identify data disks regardless of syno_disk_type,
+    // so HBA drivers that leave syno_port_type==0 (e.g. VMware mptsas) do not need the type fixed.
+    // Including is_pci_attached_scsi caused Synology's sd.c to enter its SATA port-index retry loop
+    // (want_idx) for every disk on the HBA, stalling each probe by ~15 seconds.
     if (likely(current_config.hw_config && !current_config.hw_config->is_dt)) {
         return (is_sas_port || (non_sata_port && is_virtio_host));
     }
@@ -292,6 +297,14 @@ static int on_new_scsi_disk_device(struct scsi_device *sdp)
     if (!is_fixable(sdp))
         return 0;
 
+    // DT models must not have their port type changed here.  This hook fires at SCSI_EVT_DEV_PROBING, before
+    // sd_probe() runs.  Changing syno_port_type to SATA at this point causes Synology's sd.c to enter its
+    // SATA port-index assignment retry loop (want_idx) which stalls each disk probe by ~15 seconds.
+    // populate_syno_block_info_if_needed() (the reason DT disks appear in is_fixable()) runs at PROBED_OK
+    // and does not require the port type to be changed beforehand.
+    if (current_config.hw_config && current_config.hw_config->is_dt)
+        return 0;
+
     pr_loc_dbg("Found new disk vendor=\"%s\" model=\"%s\" connected to \"%s\" HBA over non-SATA port (type=%d) - "
                "fixing to SATA port (type=%d)", sdp->vendor, sdp->model, sdp->host->hostt->name,
                sdp->host->hostt->syno_port_type, SYNO_PORT_TYPE_SATA);
@@ -304,8 +317,14 @@ static int on_new_scsi_disk_device(struct scsi_device *sdp)
 /**
  * Called for every existing SCSI-based disk to determine if there are any fixable devices which are already connected
  *
- * Every device which is fixable but still connected it will be forcefully re-connected, as this is the only way to fix
- * existing device properly.
+ * For non-DT platforms every fixable device that is still connected with a non-SATA port type is forcefully
+ * re-connected, as that is the only way to re-run sd_probe() with the corrected port type.  An in-place
+ * syno_port_type fix is insufficient because sd_probe() already ran and set the disk's syno_disk_type based on the
+ * original (wrong) port type.  Without re-probing, DSM still sees a non-SATA disk and refuses to format it.
+ *
+ * For DT platforms we fix the port type in-place without replug.  The DT is_fixable() path was added solely to
+ * support populate_syno_block_info_if_needed() firing via SCSI_EVT_DEV_PROBED_OK; force-replugging DT HBA disks
+ * was never tested and could interfere with sysfs slot mapping.
  *
  * @return 0 on success, -E on error
  */
@@ -313,6 +332,17 @@ static int on_existing_scsi_disk_device(struct scsi_device *sdp)
 {
     if (!is_fixable(sdp))
         return 0;
+
+    // DT: fix the port type in-place, no replug.
+    if (current_config.hw_config && current_config.hw_config->is_dt) {
+        pr_loc_dbg(
+                "DT: fixing port type in-place for existing disk vendor=\"%s\" model=\"%s\" on \"%s\" HBA"
+                " (type %d -> %d, no replug).",
+                sdp->vendor, sdp->model, sdp->host->hostt->name,
+                sdp->host->hostt->syno_port_type, SYNO_PORT_TYPE_SATA);
+        sdp->host->hostt->syno_port_type = SYNO_PORT_TYPE_SATA;
+        return 0;
+    }
 
     pr_loc_dbg(
             "Found initialized disk vendor=\"%s\" model=\"%s\" connected to \"%s\" HBA over non-SATA port (type=%d)."
