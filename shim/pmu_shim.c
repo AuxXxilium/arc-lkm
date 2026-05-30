@@ -4,9 +4,13 @@
 #include "shim_base.h"
 #include "../common.h"
 #include "../internal/uart/virtual_uart.h"
+#include "../internal/intercept_driver_register.h"
 #include <linux/kfifo.h> //kfifo_*
 
 #define PMU_TTYS_LINE 1 //so far this is hardcoded by syno, so we doubt it will ever change
+// 8250_fintek manages the Fintek Super-I/O COM2 port on real Synology hardware; we must suppress it
+// because the vUART already occupies ttyS1 and conflicting driver_register causes a kernel panic
+#define PMU_FINTEK_DRIVER_NAME "8250_fintek"
 #define WORK_BUFFER_LEN VUART_FIFO_LEN
 #define to_hex_buf_len(len) ((len)*3+1) //2 chars for each hex + space + NULL terminator
 #define HEX_BUFFER_LEN to_hex_buf_len(VUART_FIFO_LEN)
@@ -302,6 +306,20 @@ static noinline void process_work_buffer(bool end_of_packet)
 //               get_hex_print(work_buffer, left));
 }
 
+static driver_watcher_instance *fintek_dr_watcher = NULL;
+
+/**
+ * Suppresses 8250_fintek driver registration to prevent it from conflicting with the PMU vUART on ttyS1.
+ * On real Synology hardware the Fintek Super-I/O provides COM2 (0x2f8) for the PMU serial link;
+ * since we virtualise that port the hardware driver must not run.
+ */
+static driver_watch_notify_result pmu_fintek_watcher(struct device_driver *drv, driver_watch_notify_state event)
+{
+    pr_loc_dbg("Suppressing %s driver registration to avoid ttyS%d conflict with PMU vUART",
+               PMU_FINTEK_DRIVER_NAME, PMU_TTYS_LINE);
+    return DWATCH_NOTIFY_ABORT_OK;
+}
+
 /**
  * Callback passed to vUART. It will be called any time some data is available.
  */
@@ -344,7 +362,7 @@ int register_pmu_shim(const struct hw_config *hw)
     shim_reg_in();
 
     int out;
-    if ((out = vuart_add_device(PMU_TTYS_LINE) != 0)) {
+    if ((out = vuart_add_device(PMU_TTYS_LINE)) != 0) {
         pr_loc_err("Failed to initialize vUART for PMU at ttyS%d", PMU_TTYS_LINE);
         return out;
     }
@@ -356,6 +374,13 @@ int register_pmu_shim(const struct hw_config *hw)
     if ((out = vuart_set_tx_callback(PMU_TTYS_LINE, pmu_rx_callback, uart_buffer, VUART_THRESHOLD_MAX))) {
         pr_loc_err("Failed to register RX callback");
         goto error_out;
+    }
+
+    fintek_dr_watcher = watch_driver_register(PMU_FINTEK_DRIVER_NAME, pmu_fintek_watcher, DWATCH_STATE_COMING);
+    if (IS_ERR(fintek_dr_watcher)) {
+        pr_loc_err("Failed to register %s suppression watcher (error=%ld) - PMU ttyS%d may conflict",
+                   PMU_FINTEK_DRIVER_NAME, PTR_ERR(fintek_dr_watcher), PMU_TTYS_LINE);
+        fintek_dr_watcher = NULL; //non-fatal, continue without suppression
     }
 
     shim_reg_ok();
@@ -370,6 +395,11 @@ int register_pmu_shim(const struct hw_config *hw)
 int unregister_pmu_shim(void)
 {
     shim_ureg_in();
+
+    if (fintek_dr_watcher) {
+        unwatch_driver_register(fintek_dr_watcher);
+        fintek_dr_watcher = NULL;
+    }
 
     int out = 0;
     if (unlikely(!uart_buffer)) {
