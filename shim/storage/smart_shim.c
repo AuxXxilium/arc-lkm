@@ -95,6 +95,11 @@
 
 #define SHIM_NAME "SMART emulator"
 
+//Maximum temperature (°C) considered safe to inject into fake SMART attributes.
+//If the real disk temperature exceeds this value (e.g. a bad SCSI LOG SENSE read returning garbage) we fall back to
+//the static fake values from fake_smart[] rather than reporting an alarm-level temperature to DSM.
+#define SMART_TEMP_MAX_SAFE 70
+
 #ifdef DBG_SMART_PRINT_ALL_IOCTL
 #define pr_loc_dbg_ioctl(cmd_hex, subcmd_name, bdev) \
     pr_loc_dbg("Handling ioctl(0x%x)->%s for /dev/%s", cmd_hex, subcmd_name, (bdev)->bd_disk->disk_name);
@@ -164,6 +169,7 @@ static bool is_fake_temp_attr(u8 attr_id)
 {
     return attr_id == 190 || attr_id == 194;
 }
+
 
 //SMART components versions (some of them CANNOT be changed)
 #define SMART_SNAP_VERSION 0x01 //version for the live data snapshot; vendor-specific
@@ -429,17 +435,22 @@ static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr
     smart_values[0] = SMART_SNAP_VERSION;
 
     //copy ALL attribute bytes as we were asked for everything (including thresholds)
+    //Temperature attrs 190/194 are always included - DSM may treat a missing temp attr as a fault condition.
+    //Real temperature is injected only when it is valid (>=0) and within safe bounds (<=SMART_TEMP_MAX_SAFE).
+    //Otherwise the static fake values from fake_smart[] (27-29°C) are used as a harmless fallback.
     for (i = 0; i < ARRAY_SIZE(fake_smart); i++) {
-        if (disk_temp < 0 && is_fake_temp_attr(fake_smart[i][0]))
-            continue;
-
         for (j = 0; j < 11; j++) {
             smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + j] = fake_smart[i][j];
         }
 
-        /* inject real temperature into raw[0] (byte 5 of the attribute record) */
-        if (disk_temp >= 0 && is_fake_temp_attr(fake_smart[i][0]))
-            smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 5] = (u8)disk_temp;
+        /* inject real temperature into raw[0] (byte 5 of the attribute record) when safe */
+        if (is_fake_temp_attr(fake_smart[i][0])) {
+            if (disk_temp >= 0 && disk_temp <= SMART_TEMP_MAX_SAFE)
+                smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 5] = (u8)disk_temp;
+            else if (disk_temp > SMART_TEMP_MAX_SAFE)
+                pr_loc_wrn("Real disk temp %d°C exceeds safe limit %d°C - using static fake temp for SMART attr %d",
+                           disk_temp, SMART_TEMP_MAX_SAFE, fake_smart[i][0]);
+        }
 
         ++attr_idx;
     }
@@ -506,10 +517,8 @@ static int populate_ata_smart_thresholds(const u8 *req_header, void __user *buff
     smart_thresholds[0] = SMART_SNAP_VERSION;
 
     //copy a subset of attribute bytes as we were asked for thresholds only
+    //Temperature attrs 190/194 are always included - their thresholds are static and never depend on real temp.
     for (i = 0; i < ARRAY_SIZE(fake_smart); i++) {
-        if (disk_temp < 0 && is_fake_temp_attr(fake_smart[i][0]))
-            continue;
-
         smart_thresholds[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 0] = fake_smart[i][0]; //entry id
         smart_thresholds[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 1] = fake_smart[i][11]; //threshold value
         ++attr_idx;
@@ -752,9 +761,15 @@ static int handle_hdio_drive_cmd_ioctl(struct block_device *bdev, fmode_t mode, 
                  * SENSE (Temperature page 0x0D).  Try to read the real temperature so DSM can display it instead
                  * of hiding the attribute entirely. */
                 int disk_temp = rp_fetch_block_temp(bdev->bd_disk->disk_name);
-                if (disk_temp >= 0)
-                    pr_loc_dbg("HBA disk /dev/%s: injecting real temperature %d\u00b0C into fake SMART",
+                if (disk_temp >= 0 && disk_temp <= SMART_TEMP_MAX_SAFE)
+                    pr_loc_dbg("HBA disk /dev/%s: injecting real temperature %d°C into fake SMART",
                                bdev->bd_disk->disk_name, disk_temp);
+                else if (disk_temp > SMART_TEMP_MAX_SAFE)
+                    pr_loc_wrn("HBA disk /dev/%s: real temperature %d°C exceeds safe limit %d°C - "
+                               "using static fake temp to avoid DSM thermal shutdown",
+                               bdev->bd_disk->disk_name, disk_temp, SMART_TEMP_MAX_SAFE);
+                // disk_temp < 0 means unavailable (VMware/virtual disk); attrs 190/194 will still be
+                // included with harmless static fake values (27-29°C) from fake_smart[].
                 return handle_ata_cmd_smart(req_header, buff_ptr, disk_temp);
             }
 
