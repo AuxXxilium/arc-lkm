@@ -216,6 +216,10 @@ int __enable_symbol_override(struct override_symbol_inst *sym)
             pr_loc_dbg("Writing trampoline code to <%p>", sym->org_sym_ptr);
             memcpy(sym->org_sym_ptr, sym->trampoline, OVERRIDE_JUMP_SIZE);
             sym->installed = true;
+            //Reset mem_protected so the next call always re-applies set_symbol_rw() first. The DSM 4.4 kernel
+            //calls mark_rodata_ro()/set_kernel_text_ro() which can re-protect kernel text pages between calls,
+            //invalidating any cached "page is already RW" assumption.
+            sym->mem_protected = true;
         }
     );
 
@@ -245,6 +249,10 @@ int __disable_symbol_override(struct override_symbol_inst *sym)
             pr_loc_dbg("Writing original code to <%p>", sym->org_sym_ptr);
             memcpy(sym->org_sym_ptr, sym->org_sym_code, OVERRIDE_JUMP_SIZE);
             sym->installed = false;
+            //Reset mem_protected so the next call always re-applies set_symbol_rw() first. The DSM 4.4 kernel
+            //calls mark_rodata_ro()/set_kernel_text_ro() which can re-protect kernel text pages between calls,
+            //invalidating any cached "page is already RW" assumption.
+            sym->mem_protected = true;
         }
     );
 
