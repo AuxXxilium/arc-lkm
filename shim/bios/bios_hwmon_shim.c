@@ -88,22 +88,6 @@ static const char *hwmon_hdd_bp_id_map[] = {
     [HWMON_SYS_HDD_BP_ENABLE_ID] = HWMON_HDD_BP_ENABLE,
 };
 
-//todo: it's defined as __used as we know the structure but don't implement it yet
-static const __used char *hwmon_psu_id_map[] = {
-    [HWMON_PSU_NULL_ID] = "",
-    [HWMON_PSU_PWR_IN_ID] = HWMON_PSU_SENSOR_PIN,
-    [HWMON_PSU_PWR_OUT_ID] = HWMON_PSU_SENSOR_POUT,
-#if RP_MODULE_TARGET_VER == 6
-    [HWMON_PSU_TEMP_ID] = HWMON_PSU_SENSOR_TEMP,
-#elif RP_MODULE_TARGET_VER == 7
-    [HWMON_PSU_TEMP1_ID] = HWMON_PSU_SENSOR_TEMP1,
-    [HWMON_PSU_TEMP2_ID] = HWMON_PSU_SENSOR_TEMP2,
-    [HWMON_PSU_TEMP3_ID] = HWMON_PSU_SENSOR_TEMP3,
-    [HWMON_PSU_FAN_VOLT] = HWMON_PSU_SENSOR_FAN_VOLT,
-#endif
-    [HWMON_PSU_FAN_RPM_ID] = HWMON_PSU_SENSOR_FAN,
-    [HWMON_PSU_STATUS_ID] = HWMON_PSU_SENSOR_STATUS,
-};
 
 //todo: it's defined as __used as we know the structure but don't implement it yet
 static const __used char *hwmon_current_id_map[] = {
@@ -301,17 +285,27 @@ static int bios_hwmon_get_hdd_backplane(SYNO_HWMON_SENSOR_TYPE *reading)
 }
 
 /**
- * (Should) Return HWMON power supplies status
+ * Returns HWMON power supply status for up to iPsuNumber PSUs.
  *
- * Currently this command is not implemented and always return an error as we haven't yet seen any devices using it.
- *
- * @param reading Pointer to save results
- * @return 0 on success, -E on error
+ * Each PSU gets its own SYNO_HWMON_SENSOR_TYPE element in the psu_status array
+ * (psu_status[0] = PSU_1_Status, psu_status[1] = PSU_2_Status, ...) with a single
+ * "status" sensor reporting "1" (POWER_STATUS_GOOD).
  */
-static int bios_hwmon_get_psu_status(struct hw_config_hwmon *hwc, SYNO_HWMON_SENSOR_TYPE *reading)
+static int bios_hwmon_get_psu_status(SYNO_HWMON_SENSOR_TYPE *psu_status, int iPsuNumber)
 {
-    pr_loc_wrn("mfgBIOS: **UNIMPLEMENTED** %s(type=%s)", __FUNCTION__, HWMON_PSU_STATUS_NAME);
-    return -EIO; //todo: we haven't [yet] seen a device using this
+    hwmon_pr_loc_dbg("mfgBIOS: => %s(psu_num=%d)", __FUNCTION__, iPsuNumber);
+
+    for (int i = 0; i < iPsuNumber; i++) {
+        snprintf(psu_status[i].type_name, sizeof(psu_status[i].type_name), HWMON_PSU_STATUS_NAME, i + 1);
+        psu_status[i].sensor_num = 1;
+        guarded_strscpy(psu_status[i].sensor[0].sensor_name, HWMON_PSU_SENSOR_STATUS,
+                        sizeof(psu_status[i].sensor[0].sensor_name));
+        guarded_strscpy(psu_status[i].sensor[0].value, "1", sizeof(psu_status[i].sensor[0].value));
+
+        hwmon_pr_loc_dbg("mfgBIOS: <= %s() PSU_%d->OK", __FUNCTION__, i + 1);
+    }
+
+    return 0;
 }
 
 /**
@@ -354,8 +348,7 @@ int shim_bios_module_hwmon_entries(const struct hw_config *hw)
     if (platform_has_hwmon_hdd_bpl(hw))
         _shim_bios_module_entry(VTK_GET_HWMON_HDD_BKPLANE, bios_hwmon_get_hdd_backplane);
     
-    if (platform_has_hwmon_psu_status(hw))
-        _shim_bios_module_entry(VTK_GET_HWMON_PSU_STATUS, bios_hwmon_get_psu_status);
+    _shim_bios_module_entry(VTK_GET_HWMON_PSU_STATUS, bios_hwmon_get_psu_status);
     
     if (platform_has_hwmon_current_sens(hw))
         _shim_bios_module_entry(VTK_GET_HWMON_CURRENT, bios_hwmon_get_current);
