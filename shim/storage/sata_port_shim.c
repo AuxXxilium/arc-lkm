@@ -105,6 +105,32 @@ static bool host_has_pci_parent(const struct Scsi_Host *host)
     return false;
 }
 
+/*
+ * Returns true only when the PCI parent of this SCSI host is a storage controller
+ * (PCI class 0x01xxxx).  Network adapters like mlx5 (class 0x02xxxx) also expose a
+ * SCSI host on AMD/DT platforms and must not be treated as data-disk controllers.
+ */
+static bool host_pci_parent_is_storage(const struct Scsi_Host *host)
+{
+    struct device *dev;
+
+    if (unlikely(!host))
+        return false;
+
+    dev = host->shost_gendev.parent;
+    while (dev) {
+        if (dev->bus && strcmp(dev->bus->name, "pci") == 0) {
+            struct pci_dev *pdev = to_pci_dev(dev);
+            /* PCI class is stored as (class << 8 | revision) in pci_dev->class.
+             * The top byte is the base class; 0x01 == Mass Storage Controller. */
+            return ((pdev->class >> 16) & 0xff) == 0x01;
+        }
+        dev = dev->parent;
+    }
+
+    return false;
+}
+
 #if RP_HAS_SYNO_BLOCK_INFO
 static const char *resolve_syno_pciepath(struct device *pci_dev, char *out_buf, size_t out_len)
 {
@@ -266,7 +292,7 @@ static bool is_fixable(struct scsi_device *sdp)
     const char *proc_name = sdp->host->hostt->proc_name;
     const bool is_virtio_host = (host_name && strcmp(host_name, VIRTIO_HOST_ID) == 0) ||
                                 (proc_name && strcmp(proc_name, "virtio_scsi") == 0);
-    const bool is_pci_attached_scsi = !uses_libata && host_has_pci_parent(sdp->host);
+    const bool is_pci_attached_scsi = !uses_libata && host_pci_parent_is_storage(sdp->host);
 
     // Non-DT models: fix SAS-type ports and VirtIO SCSI only.  This matches 25.11.26 behaviour.
     // is_pci_attached_scsi is intentionally excluded here: on non-DT, DSM uses the internalportcfg
@@ -297,13 +323,20 @@ static int on_new_scsi_disk_device(struct scsi_device *sdp)
     if (!is_fixable(sdp))
         return 0;
 
-    // DT models must not have their port type changed here.  This hook fires at SCSI_EVT_DEV_PROBING, before
-    // sd_probe() runs.  Changing syno_port_type to SATA at this point causes Synology's sd.c to enter its
-    // SATA port-index assignment retry loop (want_idx) which stalls each disk probe by ~15 seconds.
-    // populate_syno_block_info_if_needed() (the reason DT disks appear in is_fixable()) runs at PROBED_OK
-    // and does not require the port type to be changed beforehand.
-    if (current_config.hw_config && current_config.hw_config->is_dt)
-        return 0;
+    // For DT models, HBA-backed PCI storage disks must NOT have their port type changed here.
+    // This hook fires at SCSI_EVT_DEV_PROBING, before sd_probe() runs.  Changing syno_port_type
+    // to SATA for HBA disks at this point causes Synology's sd.c to enter its SATA port-index
+    // assignment retry loop (want_idx) which stalls each probe by ~15 seconds.
+    // populate_syno_block_info_if_needed() (the reason those DT disks appear in is_fixable()) runs
+    // at PROBED_OK and does not require the port type to be changed beforehand.
+    // SAS and VirtIO hosts on DT platforms (e.g. AMD + fake-SATA loader) still need the port type
+    // fixed at PROBING so that sd.c assigns the correct syno_disk_type during sd_probe().
+    if (current_config.hw_config && current_config.hw_config->is_dt) {
+        const bool is_pci_storage_scsi = host_pci_parent_is_storage(sdp->host) &&
+                                         !host_uses_libata(sdp->host);
+        if (is_pci_storage_scsi)
+            return 0;
+    }
 
     pr_loc_dbg("Found new disk vendor=\"%s\" model=\"%s\" connected to \"%s\" HBA over non-SATA port (type=%d) - "
                "fixing to SATA port (type=%d)", sdp->vendor, sdp->model, sdp->host->hostt->name,
@@ -333,15 +366,23 @@ static int on_existing_scsi_disk_device(struct scsi_device *sdp)
     if (!is_fixable(sdp))
         return 0;
 
-    // DT: fix the port type in-place, no replug.
+    // DT + HBA PCI storage disk: fix the port type in-place, no replug.
+    // Force-replugging DT HBA disks was never tested and could interfere with sysfs slot mapping;
+    // populate_syno_block_info_if_needed() runs at PROBED_OK and handles slot assignment.
+    // SAS and VirtIO disks on DT platforms follow the non-DT replug path below so that sd.c
+    // re-runs sd_probe() with the corrected port type and assigns the right syno_disk_type.
     if (current_config.hw_config && current_config.hw_config->is_dt) {
-        pr_loc_dbg(
-                "DT: fixing port type in-place for existing disk vendor=\"%s\" model=\"%s\" on \"%s\" HBA"
-                " (type %d -> %d, no replug).",
-                sdp->vendor, sdp->model, sdp->host->hostt->name,
-                sdp->host->hostt->syno_port_type, SYNO_PORT_TYPE_SATA);
-        sdp->host->hostt->syno_port_type = SYNO_PORT_TYPE_SATA;
-        return 0;
+        const bool is_pci_storage_scsi = host_pci_parent_is_storage(sdp->host) &&
+                                         !host_uses_libata(sdp->host);
+        if (is_pci_storage_scsi) {
+            pr_loc_dbg(
+                    "DT: fixing port type in-place for existing disk vendor=\"%s\" model=\"%s\" on \"%s\" HBA"
+                    " (type %d -> %d, no replug).",
+                    sdp->vendor, sdp->model, sdp->host->hostt->name,
+                    sdp->host->hostt->syno_port_type, SYNO_PORT_TYPE_SATA);
+            sdp->host->hostt->syno_port_type = SYNO_PORT_TYPE_SATA;
+            return 0;
+        }
     }
 
     pr_loc_dbg(
