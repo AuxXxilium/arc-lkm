@@ -8,6 +8,7 @@
 #include <scsi/scsi.h> //cmd consts (e.g. SERVICE_ACTION_IN), SCAN_WILD_CARD, and TYPE_DISK
 #include <scsi/scsi_eh.h> //struct scsi_sense_hdr, scsi_sense_valid()
 #include <scsi/scsi_host.h> //struct Scsi_Host, SYNO_PORT_TYPE_SATA
+#include <linux/string.h> //strcmp, strncmp
 #include <scsi/scsi_transport.h> //struct scsi_transport_template
 #include <scsi/scsi_device.h> //struct scsi_device, scsi_execute_req(), scsi_is_sdev_device()
 
@@ -127,6 +128,21 @@ long long opportunistic_read_capacity(struct scsi_device *sdp)
 bool is_scsi_disk(struct scsi_device *sdp)
 {
     return (likely(sdp) && (sdp)->type == TYPE_DISK);
+}
+
+bool scsi_host_uses_libata(const struct Scsi_Host *host)
+{
+    if (unlikely(!host || !host->hostt || !host->hostt->name))
+        return false;
+
+    const char *name = host->hostt->name;
+
+    return strcmp(name, "ahci") == 0 ||
+           strcmp(name, "ahci_platform") == 0 ||
+           strcmp(name, "ata_piix") == 0 ||
+           strcmp(name, "libata") == 0 ||
+           strncmp(name, "sata_", 5) == 0 ||
+           strncmp(name, "pata_", 5) == 0;
 }
 
 bool is_sata_disk(struct device *dev)

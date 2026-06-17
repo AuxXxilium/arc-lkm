@@ -264,17 +264,7 @@ static void populate_syno_block_info_if_needed(struct scsi_device *sdp)
 
 static bool host_uses_libata(const struct Scsi_Host *host)
 {
-    if (unlikely(!host || !host->hostt || !host->hostt->name))
-        return false;
-
-    const char *name = host->hostt->name;
-
-    return strcmp(name, "ahci") == 0 ||
-           strcmp(name, "ahci_platform") == 0 ||
-           strcmp(name, "ata_piix") == 0 ||
-           strcmp(name, "libata") == 0 ||
-           strncmp(name, "sata_", 5) == 0 ||
-           strncmp(name, "pata_", 5) == 0;
+    return scsi_host_uses_libata(host);
 }
 
 /**
