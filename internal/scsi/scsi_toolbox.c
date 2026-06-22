@@ -2,7 +2,8 @@
 #include "scsiparam.h" //SCSI_*
 #include "../../common.h"
 #include "../../internal/call_protected.h" //scsi_scan_host_selected()
-#include <linux/dma-direction.h> //DMA_FROM_DEVICE
+#include <linux/ata.h> //ATA_16, ATA_SECT_SIZE, ATA_CMD_SMART, ATA_SMART_READ_VALUES
+#include <linux/dma-direction.h> //DMA_FROM_DEVICE, DMA_TO_DEVICE
 #include <linux/unaligned/be_byteshift.h> //get_unaligned_be32()
 #include <linux/delay.h> //msleep
 #include <scsi/scsi.h> //cmd consts (e.g. SERVICE_ACTION_IN), SCAN_WILD_CARD, and TYPE_DISK
@@ -273,12 +274,9 @@ int for_each_scsi_disk(on_scsi_device_cb *cb)
 
 /**
  * Reads the current temperature of a SCSI device via LOG SENSE (Temperature page 0x0D)
- *
- * @param sdp SCSI device pointer
- * @return temperature in Celsius on success, -ENODATA if the drive reports it as unavailable,
- *         or -EIO if the LOG SENSE command itself failed
+ * Works for SAS and HBA disks. Returns -EIO or -ENODATA for SATA drives.
  */
-int scsi_read_disk_temp(struct scsi_device *sdp)
+static int scsi_read_temp_log_sense(struct scsi_device *sdp)
 {
     unsigned char cmd[10] = {0};
     unsigned char buf[SCSI_LOG_TEMP_ALLOC] = {0};
@@ -311,4 +309,145 @@ int scsi_read_disk_temp(struct scsi_device *sdp)
 
     pr_loc_dbg("LOG SENSE temperature=%d\u00b0C for /dev/%s", (int)temp, sdp->syno_disk_name);
     return (int)temp;
+}
+
+/*
+ * ATA16 passthrough (SAT-3) helpers for SATA drives that don't support SCSI LOG SENSE.
+ * Priority order mirrors drivetemp.c: SCT Command Transport \u2192 SMART attr 194 \u2192 SMART attr 190.
+ */
+#define ATA_SMART_LBAM_PASS     0x4f
+#define ATA_SMART_LBAH_PASS     0xc2
+#define ATA_MAX_SMART_ATTRS     30
+#define SMART_TEMP_PROP_190     190
+#define SMART_TEMP_PROP_194     194
+#define SCT_STATUS_REQ_ADDR     0xe0
+#define SMART_READ_LOG          0xd5
+#define SMART_WRITE_LOG         0xd6
+#define SCT_STATUS_TEMP         200
+#define SCT_STATUS_VERSION_LOW  0
+#define SCT_STATUS_VERSION_HIGH 1
+#define INVALID_TEMP            0x80
+
+static int scsi_ata16_command(struct scsi_device *sdp, u8 ata_cmd, u8 feature,
+                              u8 lba_low, u8 lba_mid, u8 lba_high,
+                              void *buf, bool write)
+{
+    unsigned char cmd[16] = {0};
+    struct scsi_sense_hdr sshdr;
+
+    cmd[0]  = ATA_16;
+    cmd[1]  = write ? (5 << 1) : (4 << 1);   /* PIO data-out or data-in */
+    cmd[2]  = write ? 0x06 : 0x0e;
+    cmd[4]  = feature;
+    cmd[6]  = 1;                               /* 1 sector */
+    cmd[8]  = lba_low;
+    cmd[10] = lba_mid;
+    cmd[12] = lba_high;
+    cmd[14] = ata_cmd;
+
+    return scsi_execute_req(sdp, cmd, write ? DMA_TO_DEVICE : DMA_FROM_DEVICE,
+                            buf, ATA_SECT_SIZE, &sshdr,
+                            SCSI_CMD_TIMEOUT, SCSI_CMD_MAX_RETRIES, NULL);
+}
+
+static int scsi_ata_smart_cmd(struct scsi_device *sdp, u8 feature, u8 select, void *buf, bool write)
+{
+    return scsi_ata16_command(sdp, ATA_CMD_SMART, feature, select,
+                              ATA_SMART_LBAM_PASS, ATA_SMART_LBAH_PASS, buf, write);
+}
+
+/* SCT Command Transport: most accurate temperature source */
+static int scsi_read_temp_sct(struct scsi_device *sdp, u8 *buf)
+{
+    u16 version;
+    int ret;
+
+    ret = scsi_ata_smart_cmd(sdp, SMART_READ_LOG, SCT_STATUS_REQ_ADDR, buf, false);
+    if (ret)
+        return -EIO;
+
+    version = (buf[SCT_STATUS_VERSION_HIGH] << 8) | buf[SCT_STATUS_VERSION_LOW];
+    if (version != 2 && version != 3)
+        return -ENODATA;
+
+    if (buf[SCT_STATUS_TEMP] == INVALID_TEMP)
+        return -ENODATA;
+
+    return (int)(s8)buf[SCT_STATUS_TEMP];
+}
+
+/* SMART READ DATA: scan attribute table for attr 194 then 190 */
+static int scsi_read_temp_smart_attrs(struct scsi_device *sdp, u8 *buf)
+{
+    int ret, i, temp_190 = -1, temp_194 = -1;
+    u8 csum = 0;
+
+    ret = scsi_ata_smart_cmd(sdp, ATA_SMART_READ_VALUES, 0, buf, false);
+    if (ret)
+        return -EIO;
+
+    for (i = 0; i < ATA_SECT_SIZE; i++)
+        csum += buf[i];
+    if (csum)
+        return -EIO;
+
+    for (i = 0; i < ATA_MAX_SMART_ATTRS; i++) {
+        u8 *attr = buf + 2 + i * 12;
+        u8 id = attr[0];
+        if (!id)
+            continue;
+        if (id == SMART_TEMP_PROP_190 && temp_190 < 0)
+            temp_190 = (int)attr[5];
+        if (id == SMART_TEMP_PROP_194) {
+            temp_194 = (int)attr[5];
+            break;
+        }
+    }
+
+    if (temp_194 > 0)  return temp_194;
+    if (temp_190 > 0)  return temp_190;
+    return -ENODATA;
+}
+
+static int scsi_read_temp_ata(struct scsi_device *sdp)
+{
+    u8 *buf;
+    int temp;
+
+    kmalloc_or_exit_int(buf, ATA_SECT_SIZE);
+
+    temp = scsi_read_temp_sct(sdp, buf);
+    if (temp >= 0) {
+        pr_loc_dbg("SCT temperature=%d\u00b0C for /dev/%s", temp, sdp->syno_disk_name);
+        goto out;
+    }
+
+    temp = scsi_read_temp_smart_attrs(sdp, buf);
+    if (temp >= 0)
+        pr_loc_dbg("SMART temperature=%d\u00b0C for /dev/%s", temp, sdp->syno_disk_name);
+
+out:
+    kfree(buf);
+    return temp;
+}
+
+/**
+ * Reads the current temperature of a SCSI device.
+ * Tries SCSI LOG SENSE first (SAS/HBA), falls back to ATA SMART passthrough for SATA drives.
+ *
+ * @param sdp SCSI device pointer
+ * @return temperature in Celsius (>= 0) on success, -ENODATA if not available, -EIO on failure
+ */
+int scsi_read_disk_temp(struct scsi_device *sdp)
+{
+    int temp = scsi_read_temp_log_sense(sdp);
+    if (temp >= 0)
+        return temp;
+
+    if (scsi_host_uses_libata(sdp->host)) {
+        pr_loc_dbg("LOG SENSE failed for SATA /dev/%s - trying ATA passthrough", sdp->syno_disk_name);
+        temp = scsi_read_temp_ata(sdp);
+    }
+
+    return temp;
 }
