@@ -48,8 +48,16 @@ struct fwrev_lookup_ctx {
     bool found;
 };
 
-static int find_matching_serial(struct scsi_device *sdp, struct serial_lookup_ctx *ctx)
+struct temp_lookup_ctx {
+    const char *blk_name;
+    int temp;
+    bool found;
+};
+
+static int find_matching_serial(struct scsi_device *sdp, void *data)
 {
+    struct serial_lookup_ctx *ctx = data;
+
     if (strcmp(ctx->blk_name, sdp->syno_disk_name) != 0)
         return 0;
 
@@ -64,8 +72,10 @@ static int find_matching_serial(struct scsi_device *sdp, struct serial_lookup_ct
     return 1;
 }
 
-static int find_matching_fwrev(struct scsi_device *sdp, struct fwrev_lookup_ctx *ctx)
+static int find_matching_fwrev(struct scsi_device *sdp, void *data)
 {
+    struct fwrev_lookup_ctx *ctx = data;
+
     if (strcmp(ctx->blk_name, sdp->syno_disk_name) != 0)
         return 0;
 
@@ -82,32 +92,15 @@ static int find_matching_fwrev(struct scsi_device *sdp, struct fwrev_lookup_ctx 
     return 1;
 }
 
-static struct serial_lookup_ctx *lookup_ctx;
-static struct fwrev_lookup_ctx *fwrev_lookup_ctx;
-
-struct temp_lookup_ctx {
-    const char *blk_name;
-    int temp;
-    bool found;
-};
-static struct temp_lookup_ctx *temp_lookup_ctx;
-
-static int find_matching_serial_thunk(struct scsi_device *sdp)
+static int find_and_read_temp(struct scsi_device *sdp, void *data)
 {
-    return find_matching_serial(sdp, lookup_ctx);
-}
+    struct temp_lookup_ctx *ctx = data;
 
-static int find_matching_fwrev_thunk(struct scsi_device *sdp)
-{
-    return find_matching_fwrev(sdp, fwrev_lookup_ctx);
-}
-
-static int find_and_read_temp_thunk(struct scsi_device *sdp)
-{
-    if (strcmp(temp_lookup_ctx->blk_name, sdp->syno_disk_name) != 0)
+    if (strcmp(ctx->blk_name, sdp->syno_disk_name) != 0)
         return 0;
-    temp_lookup_ctx->found = true;
-    temp_lookup_ctx->temp = scsi_read_disk_temp(sdp);
+
+    ctx->found = true;
+    ctx->temp = scsi_read_disk_temp(sdp);
     return 1; /* stop iteration */
 }
 
@@ -122,11 +115,9 @@ const char *rp_fetch_block_serial(const char *blk_name)
     if (unlikely(!blk_name || blk_name[0] == '\0'))
         return NULL;
 
-    lookup_ctx = &ctx;
-    out = for_each_scsi_disk(find_matching_serial_thunk);
-    lookup_ctx = NULL;
+    out = for_each_scsi_disk_ctx(find_matching_serial, &ctx);
 
-    // for_each_scsi_disk() returns first non-zero callback code; positive code here means "match found".
+    /* for_each_scsi_disk_ctx() returns first non-zero callback code; positive means "match found". */
     if (unlikely(out < 0 && out != -ENXIO)) {
         pr_loc_err("Failed to enumerate SCSI disks while looking up /dev/%s serial - error=%d", blk_name, out);
         return NULL;
@@ -149,11 +140,9 @@ bool rp_fetch_block_fwrev(const char *blk_name, char *fw_rev_out, size_t fw_rev_
         return false;
 
     fw_rev_out[0] = '\0';
-    fwrev_lookup_ctx = &ctx;
-    out = for_each_scsi_disk(find_matching_fwrev_thunk);
-    fwrev_lookup_ctx = NULL;
+    out = for_each_scsi_disk_ctx(find_matching_fwrev, &ctx);
 
-    // for_each_scsi_disk() returns first non-zero callback code; positive code here means "match found".
+    /* for_each_scsi_disk_ctx() returns first non-zero callback code; positive means "match found". */
     if (unlikely(out < 0 && out != -ENXIO)) {
         pr_loc_err("Failed to enumerate SCSI disks while looking up /dev/%s fw rev - error=%d", blk_name, out);
         return false;
@@ -174,11 +163,9 @@ int rp_fetch_block_temp(const char *blk_name)
     if (unlikely(!blk_name || blk_name[0] == '\0'))
         return -EINVAL;
 
-    temp_lookup_ctx = &ctx;
-    out = for_each_scsi_disk(find_and_read_temp_thunk);
-    temp_lookup_ctx = NULL;
+    out = for_each_scsi_disk_ctx(find_and_read_temp, &ctx);
 
-    // for_each_scsi_disk() returns first non-zero callback code; positive code here means "match found".
+    /* for_each_scsi_disk_ctx() returns first non-zero callback code; positive means "match found". */
     if (unlikely(out < 0 && out != -ENXIO)) {
         pr_loc_err("Failed to enumerate SCSI disks while reading temp for /dev/%s - error=%d", blk_name, out);
         return -EIO;

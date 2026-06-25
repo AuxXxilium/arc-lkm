@@ -262,6 +262,35 @@ int for_each_scsi_disk(on_scsi_device_cb *cb)
     return for_each_scsi_x(cb, for_each_scsi_disk_filter);
 }
 
+/* Internal bundle used to pass both the user callback and context through bus_for_each_dev's single void* data slot */
+struct scsi_disk_ctx_bundle {
+    on_scsi_device_ctx_cb *cb;
+    void *ctx;
+};
+
+static int for_each_scsi_disk_ctx_filter(struct device *dev, void *data)
+{
+    if (!is_scsi_leaf(dev))
+        return 0;
+
+    struct scsi_device *sdp = to_scsi_device(dev);
+    if (!is_scsi_disk(sdp))
+        return 0;
+
+    struct scsi_disk_ctx_bundle *bundle = data;
+    return bundle->cb(sdp, bundle->ctx);
+}
+
+int for_each_scsi_disk_ctx(on_scsi_device_ctx_cb *cb, void *ctx)
+{
+    if (!is_scsi_driver_loaded())
+        return -ENXIO;
+
+    struct scsi_disk_ctx_bundle bundle = { .cb = cb, .ctx = ctx };
+    int code = bus_for_each_dev(&scsi_bus_type, NULL, &bundle, for_each_scsi_disk_ctx_filter);
+    return unlikely(code == -ENXIO) ? -EIO : code;
+}
+
 /*
  * Temperature log page (SPC-4, 7.3.13). The page header is 4 bytes, followed
  * by one or more log parameters. Parameter 0x0000 (Current Temperature) has

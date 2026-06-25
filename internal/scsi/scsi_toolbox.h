@@ -7,6 +7,7 @@ typedef struct device device;
 typedef struct scsi_device scsi_device;
 struct Scsi_Host;
 typedef int (on_scsi_device_cb)(struct scsi_device *sdp);
+typedef int (on_scsi_device_ctx_cb)(struct scsi_device *sdp, void *ctx);
 
 #define SCSI_DRV_NAME "sd" //useful for triggering watchers
 //To use this one import intercept_driver_register.h header (it's not imported here to avoid pollution)
@@ -97,11 +98,19 @@ int is_scsi_driver_loaded(void);
 int for_each_scsi_leaf(on_scsi_device_cb *cb);
 
 /**
- * Traverses list of all SCSI devices and calls the callback with every SCSCI-complaint disk found
+ * Traverses list of all SCSI devices and calls the callback with every SCSI-compliant disk found
  *
  * @return 0 on success, -E on failure. -ENXIO is reserved to always mean that the driver is not loaded
  */
 int for_each_scsi_disk(on_scsi_device_cb *cb);
+
+/**
+ * Like for_each_scsi_disk() but passes a caller-supplied context pointer to each invocation.
+ * This avoids the need for global/static context variables and is safe for concurrent callers.
+ *
+ * @return 0 on success, -E on failure. -ENXIO is reserved to always mean that the driver is not loaded
+ */
+int for_each_scsi_disk_ctx(on_scsi_device_ctx_cb *cb, void *ctx);
 
 /**
  * Reads the current temperature of a SCSI device via LOG SENSE (Temperature page 0x0D)
