@@ -86,6 +86,14 @@ static int find_matching_fwrev(struct scsi_device *sdp, void *data)
     }
 
     scnprintf(ctx->fw_rev_out, ctx->fw_rev_len, "%.*s", (int)sizeof(sdp->rev), sdp->rev);
+
+    /* Trim trailing spaces, nulls, and non-printable bytes left by SCSI inquiry padding */
+    {
+        char *p = ctx->fw_rev_out + strlen(ctx->fw_rev_out);
+        while (p > ctx->fw_rev_out && (!isprint((unsigned char)p[-1]) || p[-1] == ' '))
+            *--p = '\0';
+    }
+
     ctx->found = true;
     pr_loc_dbg("Matched /dev/%s on host%d with fw rev '%s'", sdp->syno_disk_name, sdp->host->host_no,
                ctx->fw_rev_out);
