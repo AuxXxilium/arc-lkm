@@ -89,9 +89,10 @@
 
 #include "override_symbol.h"
 #include "../../common.h"
-#include "../helper/memory_helper.h" //set_mem_addr_ro(), set_mem_addr_rw()
+#include "../helper/memory_helper.h" //set_mem_addr_ro(), set_mem_addr_rw(), mem_disable_wp(), mem_restore_wp()
 #include "../helper/symbol_helper.h" //kln_func
 #include <linux/string.h> //memcpy()
+#include <linux/irqflags.h> //local_irq_save(), local_irq_restore()
 
 #define JUMP_ADDR_POS 2 //JUMP starts at [2] in the jump template below
 #define OVERRIDE_JUMP_SIZE 1 + 1 + 8 + 1 + 1 //MOVQ + %rax + $vaddr + JMP + *%rax
@@ -200,6 +201,11 @@ static inline void prepare_trampoline(struct override_symbol_inst *sym)
  */
 int __enable_symbol_override(struct override_symbol_inst *sym)
 {
+    unsigned long flags, cr0;
+
+    local_irq_save(flags);
+    cr0 = mem_disable_wp();
+
     if (sym->mem_protected)
         set_symbol_rw(sym);
 
@@ -223,6 +229,9 @@ int __enable_symbol_override(struct override_symbol_inst *sym)
         }
     );
 
+    mem_restore_wp(cr0);
+    local_irq_restore(flags);
+
     return 0;
 }
 
@@ -236,12 +245,17 @@ int __enable_symbol_override(struct override_symbol_inst *sym)
  */
 int __disable_symbol_override(struct override_symbol_inst *sym)
 {
+    unsigned long flags, cr0;
+
+    local_irq_save(flags);
+    cr0 = mem_disable_wp();
+
     if (sym->mem_protected)
         set_symbol_rw(sym);
 
     WITH_OVS_LOCK(sym,
         if (likely(sym->installed)) {
-            //after we got the lock need to re-check the memory protection - this shouldn't be changed within spinlock
+            //after we got the lock need to re-check the memory protection - this wouldn't be changed within spinlock
             //since it generates a warning... but sometimes we have no choice
             if (sym->mem_protected)
                 set_symbol_rw(sym);
@@ -255,6 +269,9 @@ int __disable_symbol_override(struct override_symbol_inst *sym)
             sym->mem_protected = true;
         }
     );
+
+    mem_restore_wp(cr0);
+    local_irq_restore(flags);
 
     return 0;
 }

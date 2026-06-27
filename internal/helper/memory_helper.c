@@ -7,6 +7,8 @@
 #include <asm/cacheflush.h> //PAGE_ALIGN
 #include <asm/page_types.h> //PAGE_SIZE
 #include <asm/pgtable_types.h> //_PAGE_RW
+#include <asm/processor-flags.h> //X86_CR0_WP
+#include <asm/special_insns.h> //native_read_cr0(), native_write_cr0()
 
 #define PAGE_ALIGN_BOTTOM(addr) (PAGE_ALIGN(addr) - PAGE_SIZE) //aligns the memory address to bottom of the page boundary
 #define NUM_PAGES_BETWEEN(low, high) (((PAGE_ALIGN_BOTTOM(high) - PAGE_ALIGN_BOTTOM(low)) / PAGE_SIZE) + 1)
@@ -41,4 +43,16 @@ void set_mem_addr_ro(const unsigned long vaddr, unsigned long len)
     }
 
     _flush_tlb_all();
+}
+
+unsigned long mem_disable_wp(void)
+{
+    unsigned long cr0 = native_read_cr0();
+    native_write_cr0(cr0 & ~X86_CR0_WP);
+    return cr0;
+}
+
+void mem_restore_wp(unsigned long cr0)
+{
+    native_write_cr0(cr0);
 }
