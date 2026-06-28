@@ -87,28 +87,11 @@ static bool resolve_hba_port_no(const struct scsi_device *sdp, unsigned int *out
 }
 #endif
 
-static bool host_has_pci_parent(const struct Scsi_Host *host)
-{
-    struct device *dev;
-
-    if (unlikely(!host))
-        return false;
-
-    dev = host->shost_gendev.parent;
-    while (dev) {
-        if (dev->bus && strcmp(dev->bus->name, "pci") == 0)
-            return true;
-
-        dev = dev->parent;
-    }
-
-    return false;
-}
-
 /*
  * Returns true only when the PCI parent of this SCSI host is a storage controller
- * (PCI class 0x01xxxx).  Network adapters like mlx5 (class 0x02xxxx) also expose a
- * SCSI host on AMD/DT platforms and must not be treated as data-disk controllers.
+ * (PCI class 0x01xxxx).  Network adapters like mlx5 (class 0x02xxxx) and USB host
+ * controllers (class 0x0Cxxxx) also expose a SCSI host on some platforms and must
+ * not be treated as data-disk controllers.
  */
 static bool host_pci_parent_is_storage(const struct Scsi_Host *host)
 {
@@ -190,8 +173,10 @@ static void populate_syno_block_info_if_needed(struct scsi_device *sdp)
     if (!current_config.hw_config || !current_config.hw_config->is_dt)
         return;
 
-    /* Only non-libata DT disks need this; libata/ahci hosts already populate it via sd_probe() */
-    if (host_uses_libata(sdp->host) || !host_has_pci_parent(sdp->host))
+    /* Only non-libata DT disks on PCI storage controllers need this.
+     * host_pci_parent_is_storage() (class 0x01) excludes USB host controllers (class 0x0C)
+     * which would otherwise also pass host_has_pci_parent() and get a fake ahci syno_block_info. */
+    if (host_uses_libata(sdp->host) || !host_pci_parent_is_storage(sdp->host))
         return;
 
     /*
