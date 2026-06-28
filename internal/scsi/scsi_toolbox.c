@@ -297,7 +297,7 @@ int for_each_scsi_disk_ctx(on_scsi_device_ctx_cb *cb, void *ctx)
  * its value at byte offset 9 in the raw response.
  */
 #define SCSI_LOG_PAGE_TEMP      0x0D
-#define SCSI_LOG_TEMP_ALLOC     16
+#define SCSI_LOG_TEMP_ALLOC     64  /* smartctl uses 252; 64 is enough for a single-parameter temp page */
 #define SCSI_LOG_TEMP_BYTE      9
 #define SCSI_TEMP_UNAVAILABLE   0xFF
 
@@ -473,10 +473,12 @@ int scsi_read_disk_temp(struct scsi_device *sdp)
     if (temp >= 0)
         return temp;
 
-    if (scsi_host_uses_libata(sdp->host)) {
-        pr_loc_dbg("LOG SENSE failed for SATA /dev/%s - trying ATA passthrough", sdp->syno_disk_name);
-        temp = scsi_read_temp_ata(sdp);
-    }
+    /* ATA passthrough works for any SATA disk regardless of the host driver (libata, mpt3sas, megaraid, …).
+     * scsi_host_uses_libata() was the original guard but it excluded HBAs like mpt3sas whose SATA disks
+     * still respond to ATA16 passthrough commands even though the host is not a native libata controller. */
+    pr_loc_dbg("LOG SENSE failed for /dev/%s (host: %s) - trying ATA passthrough",
+               sdp->syno_disk_name, sdp->host->hostt->name);
+    temp = scsi_read_temp_ata(sdp);
 
     return temp;
 }
