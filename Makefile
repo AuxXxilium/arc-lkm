@@ -17,7 +17,6 @@ SRCS-y  += compat/string_compat.c \
 		   shim/boot_dev/native_sata_boot_shim.c shim/boot_device_shim.c \
 		   \
 		   shim/storage/smart_shim.c shim/storage/sata_port_shim.c shim/storage/scsi_disk_serial.c \
-		   shim/storage/diskidxmap_shim.c \
 		   shim/intel_auxiliary_shim.c \
 		   shim/bios/bios_hwcap_shim.c shim/bios/bios_hwmon_shim.c shim/bios/rtc_proxy.c \
 		   shim/bios/bios_shims_collection.c shim/bios/bios_psu_status_shim.c shim/bios_shim.c \
