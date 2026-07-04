@@ -1,15 +1,6 @@
 #ifndef REDPILL_MEMORY_HELPER_H
 #define REDPILL_MEMORY_HELPER_H
 
-/*
- * DSM 5.10.55+ kernels enforce CR0.WP independently of PTE flags. Setting PTE R/W alone is insufficient —
- * the CPU still page-faults supervisor writes to formerly-rodata pages. Call mem_disable_wp() before the
- * write and mem_restore_wp() after, bracketing both the set_mem_addr_rw() call and the actual store.
- * Must be used with local IRQs saved/restored to prevent preemption across the WP=0 window.
- */
-unsigned long mem_disable_wp(void);
-void mem_restore_wp(unsigned long cr0);
-
 #define WITH_MEM_UNLOCKED(vaddr, size, code)           \
     do {                                               \
         set_mem_addr_rw((unsigned long)(vaddr), size); \

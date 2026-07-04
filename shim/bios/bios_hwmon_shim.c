@@ -123,14 +123,30 @@ static int bios_get_fan_state(int no, enum MfgCompatFanStatus *status)
 }
 
 static int cur_cpu_temp = 0;
+static int cur_surface_temp = 0;
 /**
- * Returns CPU temperature across all cores
+ * Returns CPU temperature across all cores, or a single surface temperature when requested
  *
  * Currently it always returns a fake value. However, it should only do so if running under hypervisor. In bare-metal
  * scenario we can simply proxy to syno_cpu_temperature() [or not override that part at all].
+ *
+ * DSM uses the same vtable entry (and struct) for both per-core CPU temperature and "surface" temperature queries,
+ * distinguished by temp->blSurface. Answering a surf=1 request with a full cpu_temp[] array (instead of a single
+ * surface reading) makes SYNOHWSurfaceTempGet() reject the response.
  */
 static int bios_get_cpu_temp(SYNOCPUTEMP *temp)
 {
+    if (temp->blSurface) {
+        int fake_surf_temp = prandom_int_range_stable(&cur_surface_temp, TEMP_DEV, FAKE_SURFACE_TEMP_MIN,
+                                                       FAKE_SURFACE_TEMP_MAX);
+        temp->cpu_num = 1;
+        temp->cpu_temp[0] = fake_surf_temp;
+
+        hwmon_pr_loc_dbg("mfgBIOS: GET_CPU_TEMP(surf=%d) => %d°C", temp->blSurface, fake_surf_temp);
+
+        return 0;
+    }
+
     int fake_temp = prandom_int_range_stable(&cur_cpu_temp, TEMP_DEV, FAKE_CPU_TEMP_MIN, FAKE_CPU_TEMP_MAX);
     temp->cpu_num = MAX_CPU;
     for(int i=0; i < MAX_CPU; ++i)
@@ -363,6 +379,7 @@ int reset_bios_module_hwmon_shim(void)
 
     hwmon_cfg = NULL;
     cur_cpu_temp = 0;
+    cur_surface_temp = 0;
     try_kfree(hwmon_thermals);
     try_kfree(hwmon_voltages);
     try_kfree(hwmon_fans_rpm);

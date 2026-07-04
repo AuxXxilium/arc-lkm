@@ -89,10 +89,9 @@
 
 #include "override_symbol.h"
 #include "../../common.h"
-#include "../helper/memory_helper.h" //set_mem_addr_ro(), set_mem_addr_rw(), mem_disable_wp(), mem_restore_wp()
+#include "../helper/memory_helper.h" //set_mem_addr_ro(), set_mem_addr_rw()
 #include "../helper/symbol_helper.h" //kln_func
 #include <linux/string.h> //memcpy()
-#include <linux/irqflags.h> //local_irq_save(), local_irq_restore()
 
 #define JUMP_ADDR_POS 2 //JUMP starts at [2] in the jump template below
 #define OVERRIDE_JUMP_SIZE 1 + 1 + 8 + 1 + 1 //MOVQ + %rax + $vaddr + JMP + *%rax
@@ -201,11 +200,14 @@ static inline void prepare_trampoline(struct override_symbol_inst *sym)
  */
 int __enable_symbol_override(struct override_symbol_inst *sym)
 {
-    unsigned long flags, cr0;
-
-    local_irq_save(flags);
-    cr0 = mem_disable_wp();
-
+    //set_mem_addr_rw()/set_mem_addr_ro() flush the TLB on all CPUs via a synchronous, blocking IPI (on_each_cpu());
+    //that call requires local interrupts to be enabled (remote CPUs signal completion via an interrupt this CPU must
+    //be able to service), so it must run outside of any local_irq_disable() section - doing otherwise risks a
+    //cross-CPU stall/deadlock and trips the kernel's own smp_call_function_many_cond() sanity check. The actual
+    //memcpy() below is already made atomic against this CPU's interrupts by WITH_OVS_LOCK's spin_lock_irqsave().
+    //(This used to also clear CR0.WP around the whole operation, but kernels with CR0 pinning - DSM 5.10.55+ -
+    //silently force WP back to 1 and log "CR0 WP bit went missing!?", so it was dead weight; set_mem_addr_rw()'s
+    //direct PTE flip is the only mechanism that actually matters here.)
     if (sym->mem_protected)
         set_symbol_rw(sym);
 
@@ -229,9 +231,6 @@ int __enable_symbol_override(struct override_symbol_inst *sym)
         }
     );
 
-    mem_restore_wp(cr0);
-    local_irq_restore(flags);
-
     return 0;
 }
 
@@ -245,11 +244,7 @@ int __enable_symbol_override(struct override_symbol_inst *sym)
  */
 int __disable_symbol_override(struct override_symbol_inst *sym)
 {
-    unsigned long flags, cr0;
-
-    local_irq_save(flags);
-    cr0 = mem_disable_wp();
-
+    //See __enable_symbol_override() for why the CR0 dance is gone and no IRQ handling is needed here directly.
     if (sym->mem_protected)
         set_symbol_rw(sym);
 
@@ -269,9 +264,6 @@ int __disable_symbol_override(struct override_symbol_inst *sym)
             sym->mem_protected = true;
         }
     );
-
-    mem_restore_wp(cr0);
-    local_irq_restore(flags);
 
     return 0;
 }
