@@ -443,11 +443,16 @@ static int populate_ata_smart_values(const u8 *req_header, void __user *buff_ptr
             smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + j] = fake_smart[i][j];
         }
 
-        /* inject real temperature into raw[0] (byte 5 of the attribute record) when safe */
+        /* inject real temperature when safe - both VALUE (byte 3, what DSM/smartctl display as the
+         * temperature) and raw[0] (byte 5, the actual Celsius reading) need to reflect it, otherwise
+         * DSM keeps showing the static fake VALUE even though the raw reading was updated */
         if (is_fake_temp_attr(fake_smart[i][0])) {
-            if (disk_temp >= 0 && disk_temp <= SMART_TEMP_MAX_SAFE)
+            if (disk_temp >= 0 && disk_temp <= SMART_TEMP_MAX_SAFE) {
+                smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 3] = (u8)disk_temp;
                 smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 5] = (u8)disk_temp;
-            else if (disk_temp > SMART_TEMP_MAX_SAFE)
+                if ((u8)disk_temp < smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 4])
+                    smart_values[2 + (ATA_SMART_RECORD_LEN * attr_idx) + 4] = (u8)disk_temp;
+            } else if (disk_temp > SMART_TEMP_MAX_SAFE)
                 pr_loc_wrn("Real disk temp %d°C exceeds safe limit %d°C - using static fake temp for SMART attr %d",
                            disk_temp, SMART_TEMP_MAX_SAFE, fake_smart[i][0]);
         }
