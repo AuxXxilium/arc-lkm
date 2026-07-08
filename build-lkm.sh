@@ -74,7 +74,7 @@ ${BLUE}=== LKM Build Script ===${NC}
 ${GREEN}Usage:${NC} $0 [OPTIONS]
 
 ${GREEN}Options:${NC}
-  -v, --version VERSION    DSM/Toolkit version (7.1, 7.2, 7.3, 7.4, 7.4-Enterprise)
+  -v, --version VERSION    DSM/Toolkit version (7.1, 7.2, 7.3, 7.4)
   -p, --platform NAME      Build only selected platform(s), comma-separated
   -a, --all                Build all versions (prod and dev)
   -h, --help               Show this help message
@@ -129,18 +129,16 @@ interactive_mode() {
     echo "  1) 7.2"
     echo "  2) 7.3"
     echo "  3) 7.4"
-    echo "  4) 7.4-Enterprise"
-    echo "  5) all"
+    echo "  4) all"
     echo ""
-    read -p "Select version (1-5, or enter version number): " VERSION_INPUT
+    read -p "Select version (1-4, or enter version number): " VERSION_INPUT
 
     case "$VERSION_INPUT" in
       1) VERSION="7.2" ;;
       2) VERSION="7.3" ;;
       3) VERSION="7.4" ;;
-      4) VERSION="7.4-Enterprise" ;;
-      5) BUILD_ALL=true ;;
-      7.[0-9]|7.[0-9]-Enterprise) VERSION="$VERSION_INPUT" ;;
+      4) BUILD_ALL=true ;;
+      7.[0-9]) VERSION="$VERSION_INPUT" ;;
       *) log_error "Invalid selection"; exit 1 ;;
     esac
     
@@ -151,7 +149,7 @@ interactive_mode() {
 
 # Validate inputs
 validate_inputs() {
-  if [[ ! "$VERSION" =~ ^7\.[0-9](-Enterprise)?$ ]]; then
+  if [[ ! "$VERSION" =~ ^7\.[0-9]$ ]]; then
     log_error "Invalid version: $VERSION"
     exit 1
   fi
@@ -210,11 +208,11 @@ build_lkms() {
   for entry in "${PLATFORMS[@]}"; do
     local platform_name="${entry%%:*}"
 
-    if [ "$version" = "7.4-Enterprise" ]; then
-      [ "$platform_name" = "epyc7003ntb" ] || continue
-    elif [ "$platform_name" = "epyc7003ntb" ]; then
-      continue
-    fi
+    case "$platform_name" in
+      epyc7003|epyc7003ntb|icelaked)
+        [ "$version" = "7.4" ] || continue
+        ;;
+    esac
 
     if [ -n "$PLATFORM_FILTER" ]; then
       local requested=false
@@ -360,7 +358,7 @@ build_all() {
   log_info "Building all versions..."
   echo ""
   
-  for ver in 7.2 7.3 7.4 7.4-Enterprise; do
+  for ver in 7.2 7.3 7.4; do
     log_info "Starting: Version $ver"
     VERSION="$ver"
     validate_inputs

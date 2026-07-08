@@ -139,6 +139,9 @@ jobs:
             platform: epyc7003
             parm: 'prod-v7 dev-v7'
           - version: 7.4
+            platform: epyc7003ntb
+            parm: 'prod-v7 dev-v7'
+          - version: 7.4
             platform: geminilake
             parm: 'prod-v7 dev-v7'
           - version: 7.4
@@ -161,10 +164,6 @@ jobs:
             parm: 'prod-v7 dev-v7'
           - version: 7.4
             platform: v1000nk
-            parm: 'prod-v7 dev-v7'
-
-          - version: 7.4-Enterprise
-            platform: epyc7003ntb
             parm: 'prod-v7 dev-v7'
 
     runs-on: ubuntu-latest

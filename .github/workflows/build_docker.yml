@@ -27,7 +27,7 @@ jobs:
   build:
     strategy:
       matrix:
-        version: ${{ fromJSON(inputs.version != '' && format('["{0}"]', inputs.version) || '["7.2", "7.3", "7.4", "7.4-Enterprise"]') }}
+        version: ${{ fromJSON(inputs.version != '' && format('["{0}"]', inputs.version) || '["7.2", "7.3", "7.4"]') }}
     runs-on: ubuntu-latest
 
     steps:
