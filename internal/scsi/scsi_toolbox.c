@@ -219,17 +219,30 @@ int is_scsi_driver_loaded(void)
 
 /**
  * Filters out all SCSI leafs and calls the callback prescribed
+ *
+ * A reference is taken on the device before invoking the callback and dropped right after - this prevents the
+ * device from being torn down (e.g. concurrent hot-unplug) while the callback is dereferencing its fields, which
+ * would otherwise cause a NULL/dangling pointer read (see find_matching_serial()/find_and_read_temp() callers).
  */
 static int for_each_scsi_leaf_filter(struct device *dev, on_scsi_device_cb cb)
 {
     if (!is_scsi_leaf(dev))
         return 0;
 
-    return (cb)(to_scsi_device(dev));
+    struct scsi_device *sdp = to_scsi_device(dev);
+    if (scsi_device_get(sdp)) //device is being removed/deleted - skip it
+        return 0;
+
+    int code = (cb)(sdp);
+    scsi_device_put(sdp);
+
+    return code;
 }
 
 /**
  * Filters out all SCSI disks and calls the callback prescribed
+ *
+ * See for_each_scsi_leaf_filter() for why a reference is taken around the callback invocation.
  */
 static int for_each_scsi_disk_filter(struct device *dev, on_scsi_device_cb cb)
 {
@@ -240,7 +253,13 @@ static int for_each_scsi_disk_filter(struct device *dev, on_scsi_device_cb cb)
     if (!is_scsi_disk(sdp))
         return 0;
 
-    return (cb)(to_scsi_device(dev));
+    if (scsi_device_get(sdp)) //device is being removed/deleted - skip it
+        return 0;
+
+    int code = (cb)(sdp);
+    scsi_device_put(sdp);
+
+    return code;
 }
 
 static int inline for_each_scsi_x(on_scsi_device_cb *cb, int (*filter)(struct device *dev, on_scsi_device_cb cb))
@@ -277,8 +296,15 @@ static int for_each_scsi_disk_ctx_filter(struct device *dev, void *data)
     if (!is_scsi_disk(sdp))
         return 0;
 
+    //Take a reference before invoking the callback and drop it right after - see for_each_scsi_leaf_filter() for why
+    if (scsi_device_get(sdp)) //device is being removed/deleted - skip it
+        return 0;
+
     struct scsi_disk_ctx_bundle *bundle = data;
-    return bundle->cb(sdp, bundle->ctx);
+    int code = bundle->cb(sdp, bundle->ctx);
+    scsi_device_put(sdp);
+
+    return code;
 }
 
 int for_each_scsi_disk_ctx(on_scsi_device_ctx_cb *cb, void *ctx)
