@@ -94,6 +94,20 @@ static int find_matching_fwrev(struct scsi_device *sdp, void *data)
         return 0;
 
     ctx->matched = true;
+
+    /* Some HBAs/SATL bridges return a truncated INQUIRY response (<36 bytes) while still
+     * reporting a nominal transfer length to the mid-layer. In that case bytes 32-35 (the
+     * "rev" field) were never actually written from the device - they're stale heap content
+     * left over in the reused INQUIRY buffer from a previous scan, and can be printable-looking
+     * garbage that survives a plain whitespace/printability trim (shows up as mojibake, e.g.
+     * "2.0 ????", in Storage Manager). Bail out unless the device actually reported enough
+     * bytes to cover the rev field. */
+    if (sdp->inquiry_len < 36) {
+        pr_loc_dbg("Matched /dev/%s on host%d but INQUIRY response too short (%d bytes) for firmware revision",
+                   sdp->syno_disk_name, sdp->host->host_no, sdp->inquiry_len);
+        return 1;
+    }
+
     if (!has_usable_text_bounded(sdp->rev, sizeof(sdp->rev))) {
         pr_loc_dbg("Matched /dev/%s on host%d but firmware revision is empty", sdp->syno_disk_name,
                    sdp->host->host_no);
