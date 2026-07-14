@@ -263,13 +263,18 @@ static void set_ata_string(u8 *dst, const char *src, u8 length)
 }
 
 /**
- * Replaces non-printable/non-space bytes in an already-populated ATA string field with spaces, in
- * place.
+ * Blanks an already-populated ATA string field from the first space or non-printable byte
+ * onward, in place.
  *
  * Some virtualized SATA/SCSI controllers (e.g. VMware's) return a genuine, real ATA IDENTIFY
  * response for their virtual disks - that response is passed straight through by
  * handle_ata_cmd_identify()'s success path (it only touches SMART-support bits), so any malformed
  * padding in the *real* device's own firmware-revision field (word 23-26) reaches DSM unmodified.
+ * ATA string fields are always space-padded to full length with no embedded spaces in the real
+ * value (e.g. a firmware revision is never legitimately "2.0 1.5"), so once we hit either a space
+ * or a non-printable byte, everything from that point to the end of the field is padding/garbage
+ * and gets forced to spaces - this is more robust than only replacing individually non-printable
+ * bytes, since it also clears any garbage that happens to render as printable.
  * Unlike set_ata_string() this does not know the original NUL-terminated source string; it just
  * cleans up whatever is already in the field, per the same space-padding convention ATA strings use.
  *
@@ -278,8 +283,12 @@ static void set_ata_string(u8 *dst, const char *src, u8 length)
  */
 static void sanitize_ata_string(u8 *field, u8 length)
 {
+    bool blank_rest = false;
+
     for (u8 i = 0; i < length; ++i) {
-        if (!isprint(field[i]))
+        if (blank_rest || !isprint(field[i]) || field[i] == ' ')
+            blank_rest = true;
+        if (blank_rest)
             field[i] = 0x20;
     }
 }

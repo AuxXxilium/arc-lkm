@@ -37,6 +37,7 @@
 #include <scsi/scsi_device.h> //struct scsi_device
 #include <scsi/scsi_host.h> //struct Scsi_Host, SYNO_PORT_TYPE_*
 #include <linux/pci.h> //struct pci_dev, to_pci_dev()
+#include <linux/ctype.h> //isprint()
 #include "../../config/runtime_config.h"
 #include "../../config/platform_types.h"
 
@@ -141,6 +142,39 @@ static const char *resolve_syno_pciepath(struct device *pci_dev, char *out_buf, 
     return dev_name(pci_dev);
 }
 #endif
+
+/**
+ * Sanitizes sdp->rev (SCSI INQUIRY firmware revision, bytes 32-35) in place, once, right after
+ * sd_probe() populates it.
+ *
+ * Root cause: some HBAs/SATL bridges return a truncated or otherwise malformed INQUIRY response
+ * while still reporting a nominal transfer length to the mid-layer, so sdp->rev can end up with
+ * non-space garbage past the real version string (e.g. "2.0" followed by undefined bytes). The
+ * kernel mid-layer copies that raw field into sdp->rev verbatim and never touches it again -
+ * every consumer (sysfs device/rev + device/firmware_rev, DSM's synostoraged which writes
+ * /run/synostorage/disks/$dev/firm, and any ioctl path) reads the same live struct field, so
+ * sanitizing it here once at probe time fixes all of them at the source instead of scrubbing
+ * copies in each individual reader. This previously showed up as e.g. "2.0 ????" in Storage
+ * Manager and in /run/synostorage/disks/$dev/firm.
+ *
+ * Unlike populate_syno_block_info_if_needed() this is NOT DT-only or HBA-only - a short/malformed
+ * INQUIRY response is a property of the specific controller/SATL bridge, not of DT vs non-DT or
+ * libata vs HBA, so this runs for every disk.
+ */
+static void sanitize_disk_rev_field(struct scsi_device *sdp)
+{
+    /* sdp->rev is declared "const unsigned char rev[4]" in this kernel's struct scsi_device -
+     * it's an API contract (sd_probe() sets it once and nothing else is meant to write it after),
+     * not a hardware-enforced read-only mapping, so casting away constness to fix up the raw
+     * INQUIRY bytes in place is safe here. */
+    unsigned char *rev = (unsigned char *)sdp->rev;
+    size_t i;
+
+    for (i = 0; i < sizeof(sdp->rev); i++) {
+        if (!isprint(rev[i]))
+            rev[i] = ' ';
+    }
+}
 
 /**
  * Populates sdp->syno_block_info for HBA-backed disks in DT mode.
@@ -349,12 +383,14 @@ static int scsi_disk_probe_handler(struct notifier_block *self, unsigned long st
 
     /*
      * SCSI_EVT_DEV_PROBED_OK fires after sd_probe() returns successfully.
-     * By this point sd.c has set syno_disk_name and populated syno_block_info
-     * for libata/ahci disks.  For HBA disks (mptsas, mpt3sas, etc.) sd.c
-     * leaves syno_block_info empty; we fill it here so disks.sh DT slot
-     * mapping can assign these disks to physical slots.
+     * By this point sd.c has set syno_disk_name, populated sdp->rev from the raw INQUIRY
+     * response, and populated syno_block_info for libata/ahci disks. For HBA disks (mptsas,
+     * mpt3sas, etc.) sd.c leaves syno_block_info empty; we fill it here so disks.sh DT slot
+     * mapping can assign these disks to physical slots. sdp->rev is sanitized for every disk
+     * regardless of DT/HBA status - see sanitize_disk_rev_field().
      */
     if (state == SCSI_EVT_DEV_PROBED_OK) {
+        sanitize_disk_rev_field(data);
         populate_syno_block_info_if_needed(data);
         return NOTIFY_OK;
     }
@@ -366,6 +402,17 @@ static struct notifier_block scsi_disk_nb = {
     .notifier_call = scsi_disk_probe_handler,
     .priority = INT_MIN, //run late so prior notifiers can observe/adjust original values first
 };
+
+/**
+ * for_each_scsi_disk() callback wrapper for sanitize_disk_rev_field()
+ *
+ * Needed because sanitize_disk_rev_field() returns void but on_scsi_device_cb expects an int.
+ */
+static int sanitize_disk_rev_field_cb(struct scsi_device *sdp)
+{
+    sanitize_disk_rev_field(sdp);
+    return 0;
+}
 
 int register_sata_port_shim(void)
 {
@@ -386,7 +433,15 @@ int register_sata_port_shim(void)
         pr_loc_err("Failed to enumerate current SCSI disks - error=%d", out);
         return out;
     }
-    
+
+    /* Sanitize sdp->rev for disks that were already probed before this shim loaded (e.g. LKM
+     * reload) - on_existing_scsi_disk_device() above only touches is_fixable() disks (SAS/VirtIO/
+     * PCI-storage HBA needing a port-type fix), so an already-SATA-typed disk with a malformed
+     * INQUIRY response would otherwise never get its rev field sanitized. */
+    out = for_each_scsi_disk(sanitize_disk_rev_field_cb);
+    if (unlikely(out != 0 && out != -ENXIO))
+        pr_loc_wrn("Failed to sanitize rev field on existing SCSI disks - error=%d", out);
+
     shim_reg_ok();
     return 0;
 }
