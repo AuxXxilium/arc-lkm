@@ -93,6 +93,8 @@
 #include <linux/spinlock.h> //spinlock_t, spin_*
 #include <linux/ata.h> //ATA_*
 #include <linux/ctype.h> //isprint()
+#include <linux/stddef.h> //offsetof()
+#include <scsi/sg.h> //SG_IO, struct sg_io_hdr
 
 #define SHIM_NAME "SMART emulator"
 
@@ -785,9 +787,8 @@ static int handle_hdio_drive_cmd_ioctl(struct block_device *bdev, fmode_t mode, 
         case ATA_CMD_ID_ATA:
             pr_loc_dbg_ioctl(cmd, "ATA_CMD_ID_ATA", bdev);
 
-            // TODO for some disks from HBA, we can get smart info from SG_IO,
-            // but for SA6400, DSM only fetch ATA smart info,
-            // we need convert SG_IO smart info into ATA format instead of fake it.
+            // Some HBA-attached disks are queried via SG_IO ATA PASS-THROUGH instead of this HDIO_DRIVE_CMD
+            // path - see handle_sg_io_ioctl()/sanitize_sg_io_identify_response() for the equivalent fw_rev fix.
 
             // use the real serial if it's not empty, other wise use the disk name
             const char *disk_serial;
@@ -923,6 +924,105 @@ handle_hdio_drive_task_ioctl(struct block_device *bdev, fmode_t mode, unsigned i
     }
 }
 
+//SAT (SCSI/ATA Translation) ATA PASS-THROUGH opcodes - see T10 SAT-3 spec
+#define ATA_PASS_THROUGH_12 0xa1
+#define ATA_PASS_THROUGH_16 0x85
+//Byte offset of the ATA command register within each PASS-THROUGH CDB variant
+#define ATA_PT12_CMD_OFFSET 9
+#define ATA_PT16_CMD_OFFSET 14
+
+/**
+ * Detects whether a SG_IO CDB is an ATA PASS-THROUGH(12) or (16) wrapping ATA_CMD_ID_ATA (IDENTIFY DEVICE)
+ *
+ * smartctl (and other SAT-aware tools) use SG_IO to query HBA-attached SATA disks that don't expose a native
+ * HDIO_DRIVE_CMD path - see handle_hdio_drive_cmd_ioctl()'s ATA_CMD_ID_ATA case for the equivalent native path
+ * and why its response needs the same fw_rev sanitization.
+ *
+ * @param cdb SCSI CDB copied from userspace
+ * @param cdb_len number of valid bytes in cdb (sg_io_hdr.cmd_len)
+ * @return true if this CDB is an ATA PASS-THROUGH IDENTIFY DEVICE request
+ */
+static bool is_ata_identify_passthrough(const u8 *cdb, u8 cdb_len)
+{
+    if (cdb_len >= 12 && cdb[0] == ATA_PASS_THROUGH_12)
+        return cdb[ATA_PT12_CMD_OFFSET] == ATA_CMD_ID_ATA;
+
+    if (cdb_len >= 16 && cdb[0] == ATA_PASS_THROUGH_16)
+        return cdb[ATA_PT16_CMD_OFFSET] == ATA_CMD_ID_ATA;
+
+    return false;
+}
+
+/**
+ * Sanitizes the firmware-revision field of an SG_IO ATA PASS-THROUGH IDENTIFY DEVICE response
+ *
+ * HBA-attached SATA disks are sometimes queried by tools (smartctl, syno_hdd_util) via SG_IO ATA PASS-THROUGH
+ * instead of HDIO_DRIVE_CMD - see is_ata_identify_passthrough(). That response is a genuine, real IDENTIFY DEVICE
+ * data block returned straight from the disk, same shape as the "real IDENTIFY passthrough" case in
+ * handle_ata_cmd_identify(); it can carry the same kind of malformed firmware-revision padding (non-space garbage
+ * past the actual version string) that previously reached DSM/hdddb.sh unmodified, showing up as e.g. "2.0 ????"
+ * in Storage Manager. Only the fw_rev field is touched - the rest of the IDENTIFY block, and any other SG_IO
+ * command entirely, is left untouched.
+ *
+ * @param hdr sg_io_hdr copied from userspace, already validated to be an ATA IDENTIFY passthrough with data
+ *            returned from the device (dxfer_direction == SG_DXFER_FROM_DEV)
+ */
+static void sanitize_sg_io_identify_response(const struct sg_io_hdr *hdr)
+{
+    u8 fw_rev[sizeof(((struct rp_hd_driveid *)0)->fw_rev)];
+    void __user *fw_rev_ptr;
+
+    if (unlikely(!hdr->dxferp || hdr->dxfer_len < sizeof(struct rp_hd_driveid)))
+        return;
+
+    fw_rev_ptr = (u8 __user *)hdr->dxferp + offsetof(struct rp_hd_driveid, fw_rev);
+
+    if (unlikely(copy_from_user(fw_rev, fw_rev_ptr, sizeof(fw_rev)) != 0)) {
+        pr_loc_err("Failed to copy SG_IO IDENTIFY fw_rev from user ptr=%p", fw_rev_ptr);
+        return;
+    }
+
+    sanitize_ata_string(fw_rev, sizeof(fw_rev));
+
+    if (unlikely(copy_to_user(fw_rev_ptr, fw_rev, sizeof(fw_rev)) != 0))
+        pr_loc_err("Failed to copy sanitized SG_IO IDENTIFY fw_rev back to user ptr=%p", fw_rev_ptr);
+}
+
+/**
+ * Shims SG_IO commands, sanitizing ATA PASS-THROUGH IDENTIFY DEVICE responses for HBA-attached SATA disks
+ *
+ * SG_IO is a general-purpose SCSI passthrough ioctl used by many tools for many commands - we let the real ioctl()
+ * run unconditionally first (same as every other handler in this file), then inspect the CDB the caller sent.
+ * Anything other than an ATA PASS-THROUGH(12/16) IDENTIFY DEVICE with data returned from the device is left
+ * completely alone; we never fake or reinterpret arbitrary SG_IO traffic.
+ *
+ * @return the original ioctl() result, unconditionally - we only ever mutate the response buffer, never the
+ *         reported exit code
+ */
+static int handle_sg_io_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd, void __user *arg_ptr)
+{
+    int ioctl_out = sd_ioctl_org(bdev, mode, cmd, (unsigned long)arg_ptr);
+
+    struct sg_io_hdr hdr;
+    if (unlikely(copy_from_user(&hdr, arg_ptr, sizeof(hdr)) != 0))
+        return ioctl_out; //can't inspect it - just proxy the result as-is
+
+    if (hdr.dxfer_direction != SG_DXFER_FROM_DEV || !hdr.cmdp || hdr.cmd_len == 0)
+        return ioctl_out;
+
+    u8 cdb[16] = {0};
+    u8 cdb_copy_len = (hdr.cmd_len < sizeof(cdb)) ? hdr.cmd_len : sizeof(cdb);
+    if (unlikely(copy_from_user(cdb, hdr.cmdp, cdb_copy_len) != 0))
+        return ioctl_out;
+
+    if (is_ata_identify_passthrough(cdb, cdb_copy_len)) {
+        pr_loc_dbg_ioctl(cmd, "SG_IO(ATA PASS-THROUGH IDENTIFY)", bdev);
+        sanitize_sg_io_identify_response(&hdr);
+    }
+
+    return ioctl_out;
+}
+
 /********************************** ioctl() handling re-routing from driver to shim ***********************************/
 //These are called from each other so we need to predeclare them
 int sd_ioctl_canary_install(void);
@@ -950,6 +1050,9 @@ static int sd_ioctl_smart_shim(struct block_device *bdev, fmode_t mode, unsigned
 
         case HDIO_DRIVE_TASK: //"execute task and special drive command" as per Documentation/ioctl/hdio.txt
             return handle_hdio_drive_task_ioctl(bdev, mode, cmd, (void *)arg);
+
+        case SG_IO: //SCSI generic passthrough - see handle_sg_io_ioctl() for why we only inspect ATA IDENTIFY
+            return handle_sg_io_ioctl(bdev, mode, cmd, (void *)arg);
 
         default: //any other ioctls are proxied as-is
 #       ifdef DBG_SMART_PRINT_ALL_IOCTL
