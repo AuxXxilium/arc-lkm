@@ -34,61 +34,14 @@
 #include "../../internal/scsi/scsi_toolbox.h" //scsi_force_replug()
 #include "../../internal/scsi/scsi_notifier.h"
 #include "../../internal/helper/symbol_helper.h" //kln_func
-#include "../../config/cmdline_delegate.h" //get_kernel_cmdline()
-#include "../../config/cmdline_opts.h" //CMDLINE_MAX
 #include <scsi/scsi_device.h> //struct scsi_device
 #include <scsi/scsi_host.h> //struct Scsi_Host, SYNO_PORT_TYPE_*
 #include <linux/pci.h> //struct pci_dev, to_pci_dev()
-#include <linux/string.h> //strstr()
-#include <linux/usb.h> //struct usb_device
-#include "../../compat/toolkit/drivers/usb/storage/usb.h" //host_to_us(), struct us_data
 #include "../../config/runtime_config.h"
 #include "../../config/platform_types.h"
-#include "../boot_dev/boot_shim_base.h" //get_shimmed_boot_dev()
 
 #define SHIM_NAME "SATA port emulator"
 #define VIRTIO_HOST_ID "Virtio SCSI HBA"
-
-/* Cached at shim registration time; avoids re-reading cmdline on every disk probe. */
-static bool usbinternal_enabled = false;
-
-static bool host_is_usb(const struct Scsi_Host *host)
-{
-    const char *name = host ? host->hostt->name : NULL;
-    return name && (strcmp(name, "usb-storage") == 0 || strcmp(name, "uas") == 0);
-}
-
-/*
- * Returns true when the USB host is the boot device — it must not be promoted to SATA type.
- * If vid/pid were specified in the cmdline we compare them; if they were left empty (use-first-USB),
- * we fall back to checking whether host_to_us() reports the same pusb_dev as the shimmed boot dev.
- */
-static bool host_usb_is_boot_device(const struct Scsi_Host *host)
-{
-    struct us_data *us;
-    struct usb_device *udev;
-    device_id vid, pid;
-
-    if (!host_is_usb(host))
-        return false;
-
-    us = host_to_us((struct Scsi_Host *)host);
-    if (unlikely(!us || !us->pusb_dev))
-        return false;
-
-    udev = us->pusb_dev;
-    vid = le16_to_cpu(udev->descriptor.idVendor);
-    pid = le16_to_cpu(udev->descriptor.idProduct);
-
-    if (current_config.boot_media.vid != VID_PID_EMPTY &&
-        current_config.boot_media.pid != VID_PID_EMPTY) {
-        return vid == current_config.boot_media.vid &&
-               pid == current_config.boot_media.pid;
-    }
-
-    /* No vid/pid in cmdline — use first USB device as boot; check against shimmed boot dev. */
-    return udev == (struct usb_device *)get_shimmed_boot_dev();
-}
 
 /* Some kernels/platform headers do not provide struct scsi_device::syno_block_info. */
 #ifdef BLOCK_INFO_SIZE
@@ -288,53 +241,8 @@ static void populate_syno_block_info_if_needed(struct scsi_device *sdp)
         pr_loc_wrn("snprintf failed for syno_block_info /dev/%s", sdp->syno_disk_name);
 }
 
-static void populate_usb_block_info_if_needed(struct scsi_device *sdp)
-{
-    struct device *dev;
-    const char *usb_path;
-
-    if (!current_config.hw_config || !current_config.hw_config->is_dt)
-        return;
-
-    if (!usbinternal_enabled)
-        return;
-
-    if (!host_is_usb(sdp->host))
-        return;
-
-    if (host_usb_is_boot_device(sdp->host))
-        return;
-
-    /* Don't overwrite an already-populated syno_block_info */
-    if (sdp->syno_block_info[0] != '\0')
-        return;
-
-    /* Walk the device-parent chain to find the USB device node.
-     * dev_name() on a USB device gives the bus-port string (e.g. "1-1", "1-1.2")
-     * which is exactly the usb_path format disks.sh and DSM expect. */
-    dev = sdp->sdev_gendev.parent;
-    while (dev) {
-        if (dev->bus && strcmp(dev->bus->name, "usb") == 0) {
-            usb_path = dev_name(dev);
-            if (snprintf(sdp->syno_block_info, BLOCK_INFO_SIZE,
-                         "usb_path=%s\n", usb_path) > 0)
-                pr_loc_dbg("Populated usb syno_block_info for /dev/%s: usb_path=%s",
-                           sdp->syno_disk_name, usb_path);
-            else
-                pr_loc_wrn("snprintf failed for USB syno_block_info /dev/%s", sdp->syno_disk_name);
-            return;
-        }
-        dev = dev->parent;
-    }
-
-    pr_loc_dbg("No USB device node found in parent chain for /dev/%s", sdp->syno_disk_name);
-}
 #else
 static void populate_syno_block_info_if_needed(struct scsi_device *sdp)
-{
-    (void)sdp;
-}
-static void populate_usb_block_info_if_needed(struct scsi_device *sdp)
 {
     (void)sdp;
 }
@@ -362,17 +270,12 @@ static bool is_fixable(struct scsi_device *sdp)
                                 (proc_name && strcmp(proc_name, "virtio_scsi") == 0);
     const bool is_pci_attached_scsi = !uses_libata && host_pci_parent_is_storage(sdp->host);
 
-    // Non-DT models: fix SAS-type ports, VirtIO SCSI, and USB (when usbinternal is set).
+    // Non-DT models: fix SAS-type ports and VirtIO SCSI only.
     // is_pci_attached_scsi is intentionally excluded: on non-DT, DSM uses the internalportcfg
     // bitmask (set by nondtModel in disks.sh) to identify data disks regardless of syno_disk_type,
     // so HBA drivers that leave syno_port_type==0 do not need the type fixed.
-    // USB: when usbinternal is set the LKM promotes USB hosts to SYNO_PORT_TYPE_SATA so sd_probe()
-    // assigns SYNO_DISK_SATA directly — no bitmask manipulation needed in disks.sh.
-    if (likely(current_config.hw_config && !current_config.hw_config->is_dt)) {
-        const bool is_usb = host_is_usb(sdp->host);
-        return (is_sas_port || (non_sata_port && is_virtio_host) ||
-                (is_usb && usbinternal_enabled && !host_usb_is_boot_device(sdp->host)));
-    }
+    if (likely(current_config.hw_config && !current_config.hw_config->is_dt))
+        return (is_sas_port || (non_sata_port && is_virtio_host));
 
     // DT safety mode: do not touch libata/native SATA; allow old SAS/VirtIO behavior plus generic PCI SCSI hosts.
     if (uses_libata || !(is_sas_port || is_virtio_host || is_pci_attached_scsi))
@@ -393,21 +296,11 @@ static int on_new_scsi_disk_device(struct scsi_device *sdp)
     if (!is_fixable(sdp))
         return 0;
 
-    // For DT models, HBA-backed PCI storage disks must NOT have their port type changed here.
-    // This hook fires at SCSI_EVT_DEV_PROBING, before sd_probe() runs.  Changing syno_port_type
-    // to SATA for HBA disks at this point causes Synology's sd.c to enter its SATA port-index
-    // assignment retry loop (want_idx) which stalls each probe by ~15 seconds.
-    // populate_syno_block_info_if_needed() (the reason those DT disks appear in is_fixable()) runs
-    // at PROBED_OK and does not require the port type to be changed beforehand.
-    // SAS and VirtIO hosts on DT platforms (e.g. AMD + fake-SATA loader) still need the port type
-    // fixed at PROBING so that sd.c assigns the correct syno_disk_type during sd_probe().
-    if (current_config.hw_config && current_config.hw_config->is_dt) {
-        const bool is_pci_storage_scsi = host_pci_parent_is_storage(sdp->host) &&
-                                         !host_uses_libata(sdp->host);
-        if (is_pci_storage_scsi)
-            return 0;
-    }
-
+    // DT-mode PCI-storage HBA disks (is_pci_storage_scsi) are fixed here too, same as SAS/VirtIO.
+    // This means their syno_port_type is SATA before sd_probe() runs, so sd.c assigns them sataN
+    // naming/slot mapping uniformly with native SATA disks instead of falling back to sdX/sasN.
+    // Trade-off: this can drive sd.c into its SATA port-index assignment retry loop (want_idx),
+    // stalling each affected disk's probe by ~15 seconds - accepted for naming consistency.
     pr_loc_dbg("Found new disk vendor=\"%s\" model=\"%s\" connected to \"%s\" HBA over non-SATA port (type=%d) - "
                "fixing to SATA port (type=%d)", sdp->vendor, sdp->model, sdp->host->hostt->name,
                sdp->host->hostt->syno_port_type, SYNO_PORT_TYPE_SATA);
@@ -420,14 +313,11 @@ static int on_new_scsi_disk_device(struct scsi_device *sdp)
 /**
  * Called for every existing SCSI-based disk to determine if there are any fixable devices which are already connected
  *
- * For non-DT platforms every fixable device that is still connected with a non-SATA port type is forcefully
- * re-connected, as that is the only way to re-run sd_probe() with the corrected port type.  An in-place
- * syno_port_type fix is insufficient because sd_probe() already ran and set the disk's syno_disk_type based on the
- * original (wrong) port type.  Without re-probing, DSM still sees a non-SATA disk and refuses to format it.
- *
- * For DT platforms we fix the port type in-place without replug.  The DT is_fixable() path was added solely to
- * support populate_syno_block_info_if_needed() firing via SCSI_EVT_DEV_PROBED_OK; force-replugging DT HBA disks
- * was never tested and could interfere with sysfs slot mapping.
+ * Every fixable device that is still connected with a non-SATA port type is forcefully re-connected, as that is the
+ * only way to re-run sd_probe() with the corrected port type.  An in-place syno_port_type fix is insufficient
+ * because sd_probe() already ran and set the disk's syno_disk_type based on the original (wrong) port type.
+ * Without re-probing, DSM still sees a non-SATA disk and refuses to format it (non-DT) or names/maps it as
+ * sdX/sasN instead of sataN (DT).
  *
  * @return 0 on success, -E on error
  */
@@ -435,25 +325,6 @@ static int on_existing_scsi_disk_device(struct scsi_device *sdp)
 {
     if (!is_fixable(sdp))
         return 0;
-
-    // DT + HBA PCI storage disk: fix the port type in-place, no replug.
-    // Force-replugging DT HBA disks was never tested and could interfere with sysfs slot mapping;
-    // populate_syno_block_info_if_needed() runs at PROBED_OK and handles slot assignment.
-    // SAS and VirtIO disks on DT platforms follow the non-DT replug path below so that sd.c
-    // re-runs sd_probe() with the corrected port type and assigns the right syno_disk_type.
-    if (current_config.hw_config && current_config.hw_config->is_dt) {
-        const bool is_pci_storage_scsi = host_pci_parent_is_storage(sdp->host) &&
-                                         !host_uses_libata(sdp->host);
-        if (is_pci_storage_scsi) {
-            pr_loc_dbg(
-                    "DT: fixing port type in-place for existing disk vendor=\"%s\" model=\"%s\" on \"%s\" HBA"
-                    " (type %d -> %d, no replug).",
-                    sdp->vendor, sdp->model, sdp->host->hostt->name,
-                    sdp->host->hostt->syno_port_type, SYNO_PORT_TYPE_SATA);
-            sdp->host->hostt->syno_port_type = SYNO_PORT_TYPE_SATA;
-            return 0;
-        }
-    }
 
     pr_loc_dbg(
             "Found initialized disk vendor=\"%s\" model=\"%s\" connected to \"%s\" HBA over non-SATA port (type=%d)."
@@ -485,7 +356,6 @@ static int scsi_disk_probe_handler(struct notifier_block *self, unsigned long st
      */
     if (state == SCSI_EVT_DEV_PROBED_OK) {
         populate_syno_block_info_if_needed(data);
-        populate_usb_block_info_if_needed(data);
         return NOTIFY_OK;
     }
 
@@ -502,11 +372,6 @@ int register_sata_port_shim(void)
     shim_reg_in();
 
     int out;
-    char cmdline[CMDLINE_MAX];
-    if (get_kernel_cmdline(cmdline, CMDLINE_MAX) > 0 && strstr(cmdline, "usbinternal")) {
-        usbinternal_enabled = true;
-        pr_loc_dbg("usbinternal: USB disks will be promoted to SATA type");
-    }
 
     pr_loc_dbg("Registering for new devices notifications");
     out = subscribe_scsi_disk_events(&scsi_disk_nb);
