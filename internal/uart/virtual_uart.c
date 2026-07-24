@@ -127,6 +127,24 @@ static volatile bool kernel_driver_ready = false; //Whether the 8250 UART driver
 //Get vDEV from line/ttyS number (created for consistency)
 #define get_line_vdev(line) (&ttySs[(line)])
 
+/**
+ * Bounds-checked variant of get_line_vdev() for use in the serial_in/serial_out callbacks.
+ *
+ * The 8250 driver matches ports by iobase, not by the line# we ask for (see the big comment on ttySs[]
+ * above) and it can invoke our serial_in/serial_out callbacks against a port it matched/reused internally
+ * (e.g. an earlycon port already registered on the same iobase) *before* our registration call returns -
+ * i.e. before we have any guarantee port->line is one of the 4 lines we actually emulate. Indexing ttySs[]
+ * with that value unchecked previously caused an out-of-bounds read and a kernel oops on early boot when
+ * the kernel handed us such a port. Returns NULL if line is out of range.
+ */
+static inline struct serial8250_16550A_vdev *get_line_vdev_safe(int line)
+{
+    if (unlikely(line < 0 || line >= (int)ARRAY_SIZE(ttySs)))
+        return NULL;
+
+    return &ttySs[line];
+}
+
 //8250 driver doesn't give access to the real uart_port upon adding but does it on first read/write
 #define capture_uart_port(vdev, port) if (unlikely(!(vdev)->up)) (vdev)->up = port;
 
@@ -431,9 +449,15 @@ static void handle_transmit_char(struct serial8250_16550A_vdev *vdev, unsigned c
  */
 static unsigned int serial_remote_read(struct uart_port *port, int offset)
 {
-    uart_prdbg("Serial READ for line=%d/%d", port->line, ttySs[port->line].line);
+    struct serial8250_16550A_vdev *vdev = get_line_vdev_safe(port->line);
+    if (unlikely(!vdev)) {
+        pr_loc_bug("serial_remote_read called with out-of-range line=%d (offset=%d) - not one of our ports, ignoring",
+                   port->line, offset);
+        return 0;
+    }
 
-    struct serial8250_16550A_vdev *vdev = get_line_vdev(port->line);
+    uart_prdbg("Serial READ for line=%d/%d", port->line, vdev->line);
+
     lock_vuart(vdev);
     capture_uart_port(vdev, port);
     unsigned int out;
@@ -530,9 +554,15 @@ static unsigned int serial_remote_read(struct uart_port *port, int offset)
  */
 static void serial_remote_write(struct uart_port *port, int offset, int value)
 {
-    //uart_prdbg("Serial WRITE for line=%d/%d", port->line, ttySs[port->line].line);
+    struct serial8250_16550A_vdev *vdev = get_line_vdev_safe(port->line);
+    if (unlikely(!vdev)) {
+        pr_loc_bug("serial_remote_write called with out-of-range line=%d (offset=%d value=%d) - not one of our ports, ignoring",
+                   port->line, offset, value);
+        return;
+    }
 
-    struct serial8250_16550A_vdev *vdev = get_line_vdev(port->line);
+    //uart_prdbg("Serial WRITE for line=%d/%d", port->line, vdev->line);
+
     lock_vuart(vdev);
     capture_uart_port(vdev, port);
 
