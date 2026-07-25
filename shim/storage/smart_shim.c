@@ -1193,6 +1193,16 @@ static int sd_ioctl_canary(struct block_device *bdev, fmode_t mode, unsigned int
     }
 
     sd_fops = (void *)disk->fops; //forcefully remove "const" protection here
+    if (unlikely(!sd_fops)) {
+        //gendisk exists but sd_probe_async() hasn't populated fops yet - this ioctl arrived earlier than expected
+        //(observed on newer kernels where userspace can reach the device node before async probing finishes). Keep
+        //the canary installed so a later ioctl gets another chance, and proxy this one call through the real
+        //(slow-path) original sd_ioctl() instead of failing it - otherwise every ioctl on this disk would return
+        //-EIO to userspace until the canary happens to land after fops is populated.
+        pr_loc_dbg("Gendisk has no ops yet - proxying via overridden symbol and keeping canary armed");
+        goto out_unlock_call_org;
+    }
+
     out = sd_ioctl_smart_shim_install();
     if (out != 0) {
         pr_loc_err("Failed to install proper SMART shim");
@@ -1216,6 +1226,12 @@ out_unlock:
 
     pr_loc_dbg("Canary finished - routing to sd_fops->ioctl = %pF<%p>", sd_fops->ioctl, sd_fops->ioctl);
     return sd_fops->ioctl(bdev, mode, cmd, arg);
+
+out_unlock_call_org:
+    sd_fops = NULL;
+    spin_unlock(&sd_ioctl_canary_lock);
+    call_overridden_symbol(out, sd_ioctl_canary_ovs, bdev, mode, cmd, arg);
+    return out;
 }
 
 /**
