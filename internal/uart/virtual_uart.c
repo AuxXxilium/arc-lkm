@@ -431,6 +431,15 @@ static void handle_transmit_char(struct serial8250_16550A_vdev *vdev, unsigned c
  */
 static unsigned int serial_remote_read(struct uart_port *port, int offset)
 {
+    //The 8250 driver matches ports internally by iobase and can invoke this callback with a port->line we never
+    // registered (e.g. during its own probe/reuse bookkeeping, before or without ever going through vuart_add_device()).
+    // ttySs[] is a fixed-size array (see SERIAL8250_LAST_ISA_LINE) so an out-of-range line here is an out-of-bounds
+    // read, not just a logic error - guard it instead of trusting the driver to only ever call us back sanely.
+    if (unlikely(port->line > SERIAL8250_LAST_ISA_LINE)) {
+        pr_loc_bug("Serial READ for out-of-range line=%d (max=%d) - ignoring", port->line, SERIAL8250_LAST_ISA_LINE);
+        return 0;
+    }
+
     uart_prdbg("Serial READ for line=%d/%d", port->line, ttySs[port->line].line);
 
     struct serial8250_16550A_vdev *vdev = get_line_vdev(port->line);
@@ -531,6 +540,13 @@ static unsigned int serial_remote_read(struct uart_port *port, int offset)
 static void serial_remote_write(struct uart_port *port, int offset, int value)
 {
     //uart_prdbg("Serial WRITE for line=%d/%d", port->line, ttySs[port->line].line);
+
+    //See the matching guard in serial_remote_read() for why this check is needed - ttySs[] is fixed-size and the
+    // driver can call us back with a port->line we never registered.
+    if (unlikely(port->line > SERIAL8250_LAST_ISA_LINE)) {
+        pr_loc_bug("Serial WRITE for out-of-range line=%d (max=%d) - ignoring", port->line, SERIAL8250_LAST_ISA_LINE);
+        return;
+    }
 
     struct serial8250_16550A_vdev *vdev = get_line_vdev(port->line);
     lock_vuart(vdev);
