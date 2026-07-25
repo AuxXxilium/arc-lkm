@@ -32,6 +32,17 @@ redpill-objs := $(OBJS)
 ccflags-y += -std=gnu99 -fgnu89-inline -Wno-declaration-after-statement
 ccflags-y += -I$(src)/compat/toolkit/include
 
+# Decouple from the target kernel's CONFIG_RETPOLINE: when the kernel tree has
+# it enabled, arch/x86/Makefile injects -mindirect-branch=thunk-extern into
+# KBUILD_CFLAGS, which this module inherits since it's built via
+# "make -C $(LINUX_SRC) M=$(PWD) modules". That makes GCC emit calls to
+# __x86_indirect_thunk_* for every indirect call/jump, which only exist as
+# exported symbols when CONFIG_RETPOLINE=y - so this module fails to load
+# ("Unknown symbol __x86_indirect_thunk_*") on any kernel build with it off.
+# Forcing plain indirect branches here makes loading independent of that
+# kernel config option either way.
+ccflags-y += $(call cc-option,-mindirect-branch=keep) $(call cc-option,-mfunction-return=keep)
+
 ifndef RP_VERSION_POSTFIX
 RP_VERSION_POSTFIX := $(shell git rev-parse --is-inside-work-tree 1>/dev/null 2>/dev/null && echo -n "git-" && git log -1 --pretty='%h' 2>/dev/null || date '+at-%Y_%m_%d-%H_%M_%S')
 endif
