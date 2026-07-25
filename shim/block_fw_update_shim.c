@@ -80,7 +80,10 @@ int register_fw_update_shim(void)
     if (out != 0)
         return out;
 
-    patch_dmi();
+    //TEMP-DIAGNOSTIC: patch_dmi() disabled to test whether overriding
+    //DMI_PRODUCT_NAME to "Synoden" is what makes sfdisk/sparted fail with
+    //EIO on /dev/sata2 during partitioning - revert once confirmed either way.
+    //patch_dmi();
 
     shim_reg_ok();
     return 0;
