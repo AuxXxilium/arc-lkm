@@ -1197,10 +1197,26 @@ static int sd_ioctl_canary(struct block_device *bdev, fmode_t mode, unsigned int
         //gendisk exists but sd_probe_async() hasn't populated fops yet - this ioctl arrived earlier than expected
         //(observed on newer kernels where userspace can reach the device node before async probing finishes). Keep
         //the canary installed so a later ioctl gets another chance, and proxy this one call through the real
-        //(slow-path) original sd_ioctl() instead of failing it - otherwise every ioctl on this disk would return
-        //-EIO to userspace until the canary happens to land after fops is populated.
-        pr_loc_dbg("Gendisk has no ops yet - proxying via overridden symbol and keeping canary armed");
-        goto out_unlock_call_org;
+        //original sd_ioctl() instead of failing it - otherwise every ioctl on this disk would return -EIO to
+        //userspace until the canary happens to land after fops is populated.
+        //
+        //IMPORTANT: this must call the original function via __get_org_ptr() (a plain pointer read) and NOT via
+        //call_overridden_symbol()/call_overridden_symbol_void(). Those macros disable the sd_ioctl override by
+        //live-patching the trampoline out of sd_ioctl()'s in-memory code (memcpy over org_sym_ptr under
+        //WITH_OVS_LOCK, toggling page RW/RO), calling through, then patching it back in - all of which was
+        //designed for the rare single-shot cases elsewhere in this codebase, never for a path that can be hit by
+        //a burst of concurrent ioctls from multiple CPUs at once (e.g. sfdisk/mdadm hammering several /dev/sataN
+        //nodes during storage pool creation). Two threads racing through that disable/patch/enable dance on the
+        //same globally-shared sd_ioctl override caused crashes during pool creation. Calling the saved original
+        //pointer directly is reentrant and doesn't touch sd_ioctl's code or page protection at all, so it's safe
+        //under concurrency; we keep sd_ioctl_canary_lock held for the same reason - to serialize our own state
+        //(sd_fops) without ever needing the code-patching path.
+        pr_loc_dbg("Gendisk has no ops yet - proxying via saved original pointer and keeping canary armed");
+        sd_fops = NULL;
+        void *org_ptr = __get_org_ptr(sd_ioctl_canary_ovs);
+        spin_unlock(&sd_ioctl_canary_lock);
+        int (*org_ioctl)(struct block_device *, fmode_t, unsigned, unsigned long) = org_ptr;
+        return org_ioctl(bdev, mode, cmd, arg);
     }
 
     out = sd_ioctl_smart_shim_install();
@@ -1226,12 +1242,6 @@ out_unlock:
 
     pr_loc_dbg("Canary finished - routing to sd_fops->ioctl = %pF<%p>", sd_fops->ioctl, sd_fops->ioctl);
     return sd_fops->ioctl(bdev, mode, cmd, arg);
-
-out_unlock_call_org:
-    sd_fops = NULL;
-    spin_unlock(&sd_ioctl_canary_lock);
-    call_overridden_symbol(out, sd_ioctl_canary_ovs, bdev, mode, cmd, arg);
-    return out;
 }
 
 /**
