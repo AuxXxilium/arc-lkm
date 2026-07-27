@@ -4,22 +4,26 @@
  * WHY THIS SHIM?
  * Synology's libata-core.c exports get_disk_port_type_and_index_by_ata_port(), which every libata error-handling
  * path (link resets, port scans - see libata-eh.c/libata-scsi.c) calls to resolve which physical bay/slot an
- * ata_port maps to, by walking the kernel's Device Tree (starting from the global `of_root`). On non-DT platforms
- * (i.e. everything running under redpill - this loader boots via ACPI/legacy BIOS, not real DT hardware) `of_root`
- * is always NULL, so the function immediately hits its own parameter-validation branch and logs:
+ * ata_port maps to, by walking the kernel's Device Tree starting from the global `of_root`. Under redpill `of_root`
+ * is always NULL regardless of which physical platform is being emulated (hw_config.is_dt reflects whether the real
+ * hardware being emulated normally ships a DT blob - e.g. epyc7002/SA6400 has is_dt=true - but this loader boots via
+ * ACPI/legacy BIOS/hypervisor, which never populates an actual `of_root` DT blob at all). So on every redpill boot,
+ * DT-flagged platforms included, the function immediately hits its own parameter-validation branch and logs:
  *     printk("Invalid parameter\n");
  * before returning -1. That's not a real error - a NULL of_root is the expected, permanent state on every platform
- * this loader supports - but because it's called from libata-eh on every port during boot (and again on every link
- * reset/rescan) it floods the kernel log with dozens of context-free "Invalid parameter" lines with no indication
- * of where they came from.
+ * this loader supports, DT-flagged or not - but because it's called from libata-eh on every port during boot (and
+ * again on every link reset/rescan) it floods the kernel log with dozens of context-free "Invalid parameter" lines
+ * with no indication of where they came from.
  *
  * HOW DOES IT WORK?
- * We override the exported symbol with a thin shim that special-cases the is_dt=false platforms (i.e. all of them,
- * currently) to return "no DT mapping" immediately, without calling the real function or touching any DT internals -
- * of_root is NULL either way, so this is exactly the value the original function would have computed via its own
- * `NULL == of_root` check anyway, just without the printk. On the off chance a future DT-aware platform is added
- * (is_dt=true), we don't touch behavior at all: the call is passed through to the real, saved-original function
- * pointer unconditionally, so the actual DT-walk logic still runs exactly as shipped.
+ * We override the exported symbol with a thin shim that checks the actual `of_root` kernel global directly (the
+ * same one the real function checks) rather than hw_config.is_dt - the two are different things: is_dt describes
+ * the physical hardware being emulated, of_root describes whether a device tree is actually present *in this boot*.
+ * When of_root is NULL we return "no DT mapping" immediately, without calling the real function - this is exactly
+ * the value the original function would have computed via its own `NULL == of_root` check anyway, just without the
+ * printk. If a real of_root ever exists (e.g. this loader gains genuine DT-boot support in the future), the call is
+ * passed through to the real, saved-original function pointer unconditionally, so the actual DT-walk logic still
+ * runs exactly as shipped.
  *
  * IMPORTANT: the original function is invoked via a raw saved pointer, NOT via call_overridden_symbol()/
  * call_overridden_symbol_void(). Those macros temporarily patch the live sd_ioctl-style trampoline out of the
@@ -33,6 +37,7 @@
  * References
  *   - drivers/ata/libata-core.c (get_disk_port_type_and_index_by_ata_port, GPL source)
  *   - drivers/ata/libata-eh.c, drivers/ata/libata-scsi.c (callers)
+ *   - drivers/of/base.c (of_root; EXPORT_SYMBOL'd, declared extern in include/linux/of.h)
  */
 #include "dt_disk_port_shim.h"
 #include "../shim_base.h"
@@ -41,22 +46,22 @@
 #include "../../internal/override/override_symbol.h"
 #include <linux/libata.h> //struct ata_port
 #include <linux/synolib.h> //DISK_PORT_TYPE
+#include <linux/of.h> //of_root
 
 #define SHIM_NAME "DT disk port resolver"
 #define SHIMMED_SYMBOL "get_disk_port_type_and_index_by_ata_port"
 
 static override_symbol_inst *ov_disk_port_type = NULL;
 static int (*org_disk_port_type)(const struct ata_port *, DISK_PORT_TYPE *, int *) = NULL;
-static bool platform_is_dt = false;
 
 static int get_disk_port_type_and_index_by_ata_port_shim(const struct ata_port *ap, DISK_PORT_TYPE *portType,
                                                           int *portIndex)
 {
-    //DT-aware platforms: never touched, pass through to the real DT-walking implementation unconditionally
-    if (unlikely(platform_is_dt))
+    //A real of_root (genuine DT boot): never touched, pass through to the real DT-walking implementation
+    if (unlikely(of_root))
         return org_disk_port_type(ap, portType, portIndex);
 
-    //Non-DT platforms (everything else): of_root is always NULL here, so the real function's combined
+    //of_root is NULL (every redpill boot, on every platform): the real function's combined
     //"NULL == ap || NULL == of_root || ..." guard always trips regardless of ap/portType/portIndex validity,
     //jumping straight to its "return iRet" with iRet still at its initial -1 and *portType/*portIndex never
     //touched (the *portType = UNKNOWN_DEVICE assignment sits after that guard, so it's unreachable here).
@@ -64,11 +69,9 @@ static int get_disk_port_type_and_index_by_ata_port_shim(const struct ata_port *
     return -1;
 }
 
-int register_dt_disk_port_shim(const struct hw_config *hw)
+int register_dt_disk_port_shim(void)
 {
     shim_reg_in();
-
-    platform_is_dt = hw->is_dt;
 
     if (unlikely(!kernel_has_symbol(SHIMMED_SYMBOL))) {
         pr_loc_bug("Cannot shim " SHIMMED_SYMBOL "() - symbol not found");
