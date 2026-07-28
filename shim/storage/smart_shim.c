@@ -1164,6 +1164,8 @@ static int sd_ioctl_canary(struct block_device *bdev, fmode_t mode, unsigned int
 {
     int out = -EIO;
     bool proxy_ioctl = false;
+    bool do_transition = false;
+    struct override_symbol_inst *ovs_to_uninstall = NULL;
     spin_lock(&sd_ioctl_canary_lock);
 
     pr_loc_dbg("%s triggered for first ioctl()", __FUNCTION__);
@@ -1219,24 +1221,50 @@ static int sd_ioctl_canary(struct block_device *bdev, fmode_t mode, unsigned int
         return org_ioctl(bdev, mode, cmd, arg);
     }
 
-    out = sd_ioctl_smart_shim_install();
-    if (out != 0) {
-        pr_loc_err("Failed to install proper SMART shim");
-        out = -EIO;
-        goto out_unlock;
-    }
-
-    out = sd_ioctl_canary_uninstall(); //it will log what's wrong
-    if (out != 0) {
-        out = -EIO; //we cannot continue as the sd_ioctl() wasn't restored and calling the shim can cause infinite loop
-        goto out_unlock;
-    }
-
-    proxy_ioctl = true;
-    out = 0;
+    //Claim the install/uninstall transition under the lock (so only one concurrent caller performs it), but do the
+    //actual work AFTER unlocking below. sd_ioctl_smart_shim_install()/restore_symbol() both end up calling cross-CPU
+    //TLB-flush/page-protection code (set_mem_addr_rw/ro() -> _flush_tlb_all(), restore_symbol() -> set_symbol_rw() ->
+    //on_each_cpu()) which synchronously waits for every other CPU to acknowledge an IPI. If this CPU holds
+    //sd_ioctl_canary_lock while blocked in that wait, and another CPU is concurrently spinning on
+    //spin_lock(&sd_ioctl_canary_lock) at the top of this function (e.g. a second disk's ioctl arriving during a
+    //multi-disk burst), that CPU can never service the IPI - it can't get that far since it's stuck acquiring a lock
+    //this CPU won't release until the IPI completes. That's a genuine deadlock (observed as an RCU stall/NMI
+    //backtrace with the lock holder's CPU stuck forever inside _raw_spin_lock in sd_ioctl_canary), not just a slow
+    //path - the lock must be released before doing this work.
+    //
+    //We claim the transition by saving the ovs pointer locally and nulling the global under the lock - this makes
+    //the "already processed" branch above correctly take over for any other CPU that arrives while we're doing the
+    //(now unlocked) install/restore work below, without them needing to wait for it. We must NOT call
+    //sd_ioctl_canary_uninstall() here: it reads the (now-NULL) global and would silently no-op instead of restoring
+    //the symbol, so we call restore_symbol() directly on the saved local pointer instead.
+    ovs_to_uninstall = sd_ioctl_canary_ovs;
+    sd_ioctl_canary_ovs = NULL; //claims the transition; makes the "already processed" branch above take over for others
+    do_transition = true;
 
 out_unlock:
     spin_unlock(&sd_ioctl_canary_lock);
+
+    if (do_transition) {
+        out = sd_ioctl_smart_shim_install();
+        if (out != 0) {
+            pr_loc_err("Failed to install proper SMART shim");
+            //Put the claimed transition back so a later ioctl (or unregister_disk_smart_shim()) can still find
+            //sd_ioctl_canary_ovs and retry/clean up properly, instead of leaking the override permanently.
+            spin_lock(&sd_ioctl_canary_lock);
+            sd_ioctl_canary_ovs = ovs_to_uninstall;
+            spin_unlock(&sd_ioctl_canary_lock);
+            return -EIO;
+        }
+
+        out = restore_symbol(ovs_to_uninstall);
+        if (out != 0) {
+            pr_loc_err("Failed to uninstall sd_ioctl() canary");
+            return -EIO; //we cannot continue as the sd_ioctl() wasn't restored and calling the shim can cause infinite loop
+        }
+
+        proxy_ioctl = true;
+    }
+
     if (!proxy_ioctl)
         return out;
 
