@@ -40,6 +40,22 @@
  *   - drivers/of/base.c (of_root; EXPORT_SYMBOL'd, declared extern in include/linux/of.h)
  */
 #include "dt_disk_port_shim.h"
+
+/*
+ * get_disk_port_type_and_index_by_ata_port()/DISK_PORT_TYPE/of_root only exist on the newer,
+ * DT-capable platform kernel trees (see hw_config.is_dt in config/platforms.h for the authoritative
+ * list). The older non-DT platforms (apollolake, broadwell, broadwellnk, broadwellnkv2,
+ * broadwellntbap, denverton, avoton, braswell, bromolow, cedarview, evansport, grantley) build
+ * against a 4.4.302 kernel tree that predates this mechanism entirely - <linux/of.h>'s of_root
+ * export and/or <linux/synolib.h>'s DISK_PORT_TYPE type don't exist there, so this whole shim is
+ * compiled out on those platforms. The log spam this shim silences never applies to them either:
+ * they don't implement the DT disk-slot lookup at all, so they can't call into it.
+ */
+#if defined(RP_PLATFORM_GEMINILAKE) || defined(RP_PLATFORM_PURLEY) || defined(RP_PLATFORM_R1000) || \
+    defined(RP_PLATFORM_V1000) || defined(RP_PLATFORM_GEMINILAKENK) || defined(RP_PLATFORM_R1000NK) || \
+    defined(RP_PLATFORM_V1000NK) || defined(RP_PLATFORM_EPYC7002) || defined(RP_PLATFORM_EPYC7003) || \
+    defined(RP_PLATFORM_EPYC7003NTB) || defined(RP_PLATFORM_ICELAKED) || defined(RP_PLATFORM_KVMX64)
+
 #include "../shim_base.h"
 #include "../../common.h"
 #include "../../internal/helper/symbol_helper.h" //kernel_has_symbol()
@@ -110,3 +126,17 @@ int unregister_dt_disk_port_shim(void)
     shim_ureg_ok();
     return 0;
 }
+
+#else //non-DT platform: get_disk_port_type_and_index_by_ata_port()/of_root don't exist, nothing to shim
+
+int register_dt_disk_port_shim(void)
+{
+    return 0;
+}
+
+int unregister_dt_disk_port_shim(void)
+{
+    return 0;
+}
+
+#endif
