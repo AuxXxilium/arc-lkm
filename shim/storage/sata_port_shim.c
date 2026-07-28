@@ -304,18 +304,24 @@ static bool is_fixable(struct scsi_device *sdp)
                                 (proc_name && strcmp(proc_name, "virtio_scsi") == 0);
     const bool is_pci_attached_scsi = !uses_libata && host_pci_parent_is_storage(sdp->host);
 
-    // Non-DT models: fix SAS-type ports and VirtIO SCSI only.
-    // is_pci_attached_scsi is intentionally excluded: on non-DT, DSM uses the internalportcfg
-    // bitmask (set by nondtModel in disks.sh) to identify data disks regardless of syno_disk_type,
-    // so HBA drivers that leave syno_port_type==0 do not need the type fixed.
-    if (likely(current_config.hw_config && !current_config.hw_config->is_dt))
-        return (is_sas_port || (non_sata_port && is_virtio_host));
+    // SAS-type ports and VirtIO SCSI: fixed unconditionally on every platform (DT or not), matching the
+    // proven-working reference implementation this shim is based on (rr-lkms). This intentionally does NOT
+    // depend on hw_config.is_dt, uses_libata, or PCI class - those extra conditions below are only for the
+    // newer DT-mode generic-PCI-SCSI-HBA case (is_pci_attached_scsi) added on top, which has no equivalent
+    // in the reference and must not gate the VirtIO/SAS case that already worked before it was added.
+    if (is_sas_port || (non_sata_port && is_virtio_host))
+        return true;
 
-    // DT safety mode: do not touch libata/native SATA; allow old SAS/VirtIO behavior plus generic PCI SCSI hosts.
-    if (uses_libata || !(is_sas_port || is_virtio_host || is_pci_attached_scsi))
+    // Non-DT models: only SAS-type ports and VirtIO SCSI are fixed (handled above) - is_pci_attached_scsi is
+    // intentionally excluded here: on non-DT, DSM uses the internalportcfg bitmask (set by nondtModel in
+    // disks.sh) to identify data disks regardless of syno_disk_type, so HBA drivers that leave
+    // syno_port_type==0 do not need the type fixed.
+    if (likely(current_config.hw_config && !current_config.hw_config->is_dt))
         return false;
 
-    return true;
+    // DT safety mode: do not touch libata/native SATA; allow generic PCI SCSI HBAs (SAS/VirtIO already
+    // handled above) to also get fixed to SATA for slot-mapping consistency.
+    return !uses_libata && is_pci_attached_scsi;
 }
 
 /**
