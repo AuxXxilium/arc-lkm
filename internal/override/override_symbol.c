@@ -208,26 +208,26 @@ int __enable_symbol_override(struct override_symbol_inst *sym)
     //(This used to also clear CR0.WP around the whole operation, but kernels with CR0 pinning - DSM 5.10.55+ -
     //silently force WP back to 1 and log "CR0 WP bit went missing!?", so it was dead weight; set_mem_addr_rw()'s
     //direct PTE flip is the only mechanism that actually matters here.)
-    if (sym->mem_protected)
-        set_symbol_rw(sym);
+    //
+    //IMPORTANT: set_symbol_rw() must run unconditionally here, every time, NOT gated behind "if (mem_protected)".
+    //The previous code re-checked mem_protected a second time inside WITH_OVS_LOCK (i.e. under
+    //spin_lock_irqsave(), with this CPU's interrupts disabled) and called set_symbol_rw() there too if a
+    //concurrent enable/disable cycle on the same sym had raced in between and left mem_protected=true again.
+    //That inner call still reaches on_each_cpu() with IRQs disabled on this CPU - precisely the deadlock the
+    //comment above warns about, just reached via a narrow timing window instead of every call. set_mem_addr_rw()
+    //is idempotent (it only sets a PTE bit and flushes the TLB), so calling it unconditionally here - fully
+    //before the lock is taken - costs an occasional redundant TLB flush but can never leave the page read-only
+    //by the time we reach the memcpy below, and never touches page protection while IRQs are disabled.
+    set_symbol_rw(sym);
 
     WITH_OVS_LOCK(sym,
          if (likely(!sym->installed)) {
             if (!sym->has_trampoline)
                 prepare_trampoline(sym);
 
-            //after we got the lock need to re-check the memory protection - this shouldn't be changed within spinlock
-            //since it generates a warning... but sometimes we have no choice
-            if (sym->mem_protected)
-                set_symbol_rw(sym);
-
             pr_loc_dbg("Writing trampoline code to <%p>", sym->org_sym_ptr);
             memcpy(sym->org_sym_ptr, sym->trampoline, OVERRIDE_JUMP_SIZE);
             sym->installed = true;
-            //Reset mem_protected so the next call always re-applies set_symbol_rw() first. The DSM 4.4 kernel
-            //calls mark_rodata_ro()/set_kernel_text_ro() which can re-protect kernel text pages between calls,
-            //invalidating any cached "page is already RW" assumption.
-            sym->mem_protected = true;
         }
     );
 
@@ -244,24 +244,16 @@ int __enable_symbol_override(struct override_symbol_inst *sym)
  */
 int __disable_symbol_override(struct override_symbol_inst *sym)
 {
-    //See __enable_symbol_override() for why the CR0 dance is gone and no IRQ handling is needed here directly.
-    if (sym->mem_protected)
-        set_symbol_rw(sym);
+    //See __enable_symbol_override() for why the CR0 dance is gone and no IRQ handling is needed here directly, and
+    //why set_symbol_rw() must run unconditionally, fully outside WITH_OVS_LOCK - never gated behind mem_protected
+    //and never re-checked/re-applied inside the lock, since that reaches on_each_cpu() with IRQs disabled.
+    set_symbol_rw(sym);
 
     WITH_OVS_LOCK(sym,
         if (likely(sym->installed)) {
-            //after we got the lock need to re-check the memory protection - this wouldn't be changed within spinlock
-            //since it generates a warning... but sometimes we have no choice
-            if (sym->mem_protected)
-                set_symbol_rw(sym);
-
             pr_loc_dbg("Writing original code to <%p>", sym->org_sym_ptr);
             memcpy(sym->org_sym_ptr, sym->org_sym_code, OVERRIDE_JUMP_SIZE);
             sym->installed = false;
-            //Reset mem_protected so the next call always re-applies set_symbol_rw() first. The DSM 4.4 kernel
-            //calls mark_rodata_ro()/set_kernel_text_ro() which can re-protect kernel text pages between calls,
-            //invalidating any cached "page is already RW" assumption.
-            sym->mem_protected = true;
         }
     );
 
