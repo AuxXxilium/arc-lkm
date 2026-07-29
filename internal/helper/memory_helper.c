@@ -3,7 +3,7 @@
  */
 #include "memory_helper.h"
 #include "../../common.h"
-#include "../call_protected.h" //_flush_tlb_all()
+#include "../call_protected.h" //_flush_tlb_kernel_range()
 #include <asm/cacheflush.h> //PAGE_ALIGN
 #include <asm/page_types.h> //PAGE_SIZE
 #include <asm/pgtable_types.h> //_PAGE_RW
@@ -24,7 +24,11 @@ void set_mem_addr_rw(const unsigned long vaddr, unsigned long len)
         pte->pte |= _PAGE_RW;
     }
 
-    _flush_tlb_all();
+    //Scoped to just the touched page(s) instead of the previous _flush_tlb_all() (every page, every CPU). Still goes
+    //through the kernel's own flush_tlb_kernel_range() - correct under VMware paravirt (unlike a hand-rolled local
+    //invlpg, which can't be assumed safe to call directly outside its normal PV-aware callers) - but at a small
+    //fraction of the IPI cost of a full-system flush, since only the pages in [addr, vaddr+len) need invalidating.
+    _flush_tlb_kernel_range(PAGE_ALIGN_BOTTOM(vaddr), vaddr + len);
 }
 
 void set_mem_addr_ro(const unsigned long vaddr, unsigned long len)
@@ -40,5 +44,6 @@ void set_mem_addr_ro(const unsigned long vaddr, unsigned long len)
         pte->pte &= ~_PAGE_RW;
     }
 
-    _flush_tlb_all();
+    //See set_mem_addr_rw() above for why this is scoped instead of a full _flush_tlb_all().
+    _flush_tlb_kernel_range(PAGE_ALIGN_BOTTOM(vaddr), vaddr + len);
 }

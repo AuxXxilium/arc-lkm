@@ -82,6 +82,8 @@
 
 DEFINE_UNEXPORTED_SHIM(int, cmdline_proc_show, CP_LIST(struct seq_file *m, void *v), CP_LIST(m, v), -EFAULT);
 DEFINE_UNEXPORTED_SHIM(void, flush_tlb_all, CP_LIST(void), CP_LIST(), __VOID_RETURN__);
+DEFINE_UNEXPORTED_SHIM(void, flush_tlb_kernel_range, CP_LIST(unsigned long start, unsigned long end),
+                       CP_LIST(start, end), __VOID_RETURN__);
 
 //See header file for detailed explanation what's going on here as it's more complex than a single commit
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0)
