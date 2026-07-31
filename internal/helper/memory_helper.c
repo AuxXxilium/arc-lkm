@@ -3,13 +3,21 @@
  */
 #include "memory_helper.h"
 #include "../../common.h"
-#include "../call_protected.h" //_flush_tlb_kernel_range()
+#include "../call_protected.h" //_flush_tlb_kernel_range()/_flush_tlb_all()
 #include <asm/cacheflush.h> //PAGE_ALIGN
 #include <asm/page_types.h> //PAGE_SIZE
 #include <asm/pgtable_types.h> //_PAGE_RW
 
 #define PAGE_ALIGN_BOTTOM(addr) (PAGE_ALIGN(addr) - PAGE_SIZE) //aligns the memory address to bottom of the page boundary
 #define NUM_PAGES_BETWEEN(low, high) (((PAGE_ALIGN_BOTTOM(high) - PAGE_ALIGN_BOTTOM(low)) / PAGE_SIZE) + 1)
+
+//flush_tlb_kernel_range() is only declared (call_protected.h) for >=5.10 where it's reliably kallsyms-resolvable;
+//legacy 4.4.x platforms fall back to the full _flush_tlb_all() that was used here before.
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0)
+#define _flush_tlb_range_or_all(vaddr, end) _flush_tlb_kernel_range(vaddr, end)
+#else
+#define _flush_tlb_range_or_all(vaddr, end) _flush_tlb_all()
+#endif
 
 void set_mem_addr_rw(const unsigned long vaddr, unsigned long len)
 {
@@ -24,11 +32,10 @@ void set_mem_addr_rw(const unsigned long vaddr, unsigned long len)
         pte->pte |= _PAGE_RW;
     }
 
-    //Scoped to just the touched page(s) instead of the previous _flush_tlb_all() (every page, every CPU). Still goes
-    //through the kernel's own flush_tlb_kernel_range() - correct under VMware paravirt (unlike a hand-rolled local
-    //invlpg, which can't be assumed safe to call directly outside its normal PV-aware callers) - but at a small
-    //fraction of the IPI cost of a full-system flush, since only the pages in [addr, vaddr+len) need invalidating.
-    _flush_tlb_kernel_range(PAGE_ALIGN_BOTTOM(vaddr), vaddr + len);
+    //Scoped to just the touched page(s) instead of a full _flush_tlb_all() (every page, every CPU), on kernels where
+    //flush_tlb_kernel_range() is reliably kallsyms-resolvable (see _flush_tlb_range_or_all() above); older platforms
+    //keep using the full flush.
+    _flush_tlb_range_or_all(PAGE_ALIGN_BOTTOM(vaddr), vaddr + len);
 }
 
 void set_mem_addr_ro(const unsigned long vaddr, unsigned long len)
@@ -44,6 +51,6 @@ void set_mem_addr_ro(const unsigned long vaddr, unsigned long len)
         pte->pte &= ~_PAGE_RW;
     }
 
-    //See set_mem_addr_rw() above for why this is scoped instead of a full _flush_tlb_all().
-    _flush_tlb_kernel_range(PAGE_ALIGN_BOTTOM(vaddr), vaddr + len);
+    //See set_mem_addr_rw() above for why this is scoped instead of a full _flush_tlb_all() on newer kernels only.
+    _flush_tlb_range_or_all(PAGE_ALIGN_BOTTOM(vaddr), vaddr + len);
 }

@@ -18,8 +18,14 @@
 struct seq_file;
 CP_DECLARE_SHIM(int, cmdline_proc_show, CP_LIST(struct seq_file *m, void *v)); //extracts kernel cmdline
 CP_DECLARE_SHIM(void, flush_tlb_all, CP_LIST(void)); //used to flush caches in memory.c operations
-//Scoped kernel-range TLB flush - see memory_helper.c set_mem_addr_rw/ro() for why this replaced flush_tlb_all() there
+//Scoped kernel-range TLB flush - see memory_helper.c set_mem_addr_rw/ro() for why this replaced flush_tlb_all() there.
+//Only used on >=5.10 where it was verified resolvable via kallsyms; legacy 4.4.x platforms (e.g. DS920+) keep using
+//the full flush_tlb_all() shim below since flush_tlb_kernel_range() isn't reliably kallsyms-resolvable there and a
+//silent lookup failure would skip the TLB flush entirely, leaving a stale RO translation cached for the following
+//memcpy() in override_symbol.c and faulting.
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0)
 CP_DECLARE_SHIM(void, flush_tlb_kernel_range, CP_LIST(unsigned long start, unsigned long end));
+#endif
 
 /* Thanks Jeff... https://groups.google.com/g/kernel-meetup-bangalore/c/rvQccTl_3kc/m/BJCnnXGCAgAJ
  * In case the link disappears: Jeff Layton from RedHat decided to just nuke the getname() API after 7 years of it being
