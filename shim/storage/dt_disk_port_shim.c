@@ -89,9 +89,17 @@ int register_dt_disk_port_shim(void)
 {
     shim_reg_in();
 
+    //Some is_dt=true platforms (e.g. geminilake/DS920+, purley, r1000, v1000) are still built against the legacy
+    //4.4.x DSM kernel tree, which predates get_disk_port_type_and_index_by_ata_port() entirely - unlike geminilakenk/
+    //r1000nk/v1000nk/epyc7002+/icelaked, which are is_dt=true AND on the 5.10.x+ tree where the symbol actually
+    //exists. is_dt only describes the physical hardware being emulated, not which kernel this specific build runs
+    //on, so this has to be a runtime check, not a platform #if - a missing symbol here just means this particular
+    //kernel never implements the DT disk-slot lookup at all (same as the non-DT compiled-out stub below), not an
+    //error: falling through to -ENXIO here would fail register_dt_disk_port_shim() and panic init_() via
+    //KP_ON_LOAD_ERROR/rp_crash() on every boot of those platforms.
     if (unlikely(!kernel_has_symbol(SHIMMED_SYMBOL))) {
-        pr_loc_bug("Cannot shim " SHIMMED_SYMBOL "() - symbol not found");
-        return -ENXIO;
+        pr_loc_dbg("Skipping " SHIM_NAME " - " SHIMMED_SYMBOL "() not present on this kernel");
+        return 0;
     }
 
     ov_disk_port_type = override_symbol(SHIMMED_SYMBOL, get_disk_port_type_and_index_by_ata_port_shim);
