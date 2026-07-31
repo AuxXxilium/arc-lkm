@@ -92,6 +92,24 @@
 #include "../helper/memory_helper.h" //set_mem_addr_ro(), set_mem_addr_rw()
 #include "../helper/symbol_helper.h" //kln_func
 #include <linux/string.h> //memcpy()
+#include <linux/mutex.h>
+
+//set_mem_addr_rw()/ro() work at page granularity (PAGE_ALIGN_BOTTOM), but protection state (mem_protected) is
+//tracked per override_symbol_inst. Two unrelated symbols overridden by different shims can legitimately share a
+//page (kernel functions are packed tightly in .text). Without a lock spanning ALL instances, this sequence is
+//possible on SMP:
+//  CPU0: __enable_symbol_override(sym_A) -> set_symbol_rw(sym_A) [page now RW]
+//  CPU1: override_symbol(sym_B) on the SAME page finishes with set_symbol_ro(sym_B) [page back to RO,
+//        sym_A->mem_protected is untouched/still false - sym_A has no idea the page was re-locked]
+//  CPU0: memcpy() into sym_A's (now read-only again) .text -> silently corrupts whatever page attribute race
+//        allowed the write through, or faults; either way the trampoline/preamble written is garbage, which is
+//        eventually executed and crashes with an invalid opcode far away from here.
+//This is far more likely to actually bite on DSM 4.4.x kernels, which call mark_rodata_ro()/set_kernel_text_ro()
+//much more eagerly than 5.x, re-protecting .text out from under a cached-RW assumption. Fix: serialize the entire
+//unlock -> write -> relock sequence, across ALL override_symbol_inst's, with one global mutex (not the per-sym
+//spinlock - a mutex doesn't disable IRQs, so the on_each_cpu() IPI inside set_mem_addr_rw/ro() - which needs IRQs
+//enabled on this CPU to avoid the deadlock fixed in a prior commit - remains safe to call while holding it).
+static DEFINE_MUTEX(ovs_patch_lock);
 
 #define JUMP_ADDR_POS 2 //JUMP starts at [2] in the jump template below
 #define OVERRIDE_JUMP_SIZE 1 + 1 + 8 + 1 + 1 //MOVQ + %rax + $vaddr + JMP + *%rax
@@ -209,15 +227,15 @@ int __enable_symbol_override(struct override_symbol_inst *sym)
     //silently force WP back to 1 and log "CR0 WP bit went missing!?", so it was dead weight; set_mem_addr_rw()'s
     //direct PTE flip is the only mechanism that actually matters here.)
     //
-    //IMPORTANT: set_symbol_rw() must run unconditionally here, every time, NOT gated behind "if (mem_protected)".
-    //The previous code re-checked mem_protected a second time inside WITH_OVS_LOCK (i.e. under
-    //spin_lock_irqsave(), with this CPU's interrupts disabled) and called set_symbol_rw() there too if a
-    //concurrent enable/disable cycle on the same sym had raced in between and left mem_protected=true again.
-    //That inner call still reaches on_each_cpu() with IRQs disabled on this CPU - precisely the deadlock the
-    //comment above warns about, just reached via a narrow timing window instead of every call. set_mem_addr_rw()
-    //is idempotent (it only sets a PTE bit and flushes the TLB), so calling it unconditionally here - fully
-    //before the lock is taken - costs an occasional redundant TLB flush but can never leave the page read-only
-    //by the time we reach the memcpy below, and never touches page protection while IRQs are disabled.
+    //ovs_patch_lock (a mutex, so on_each_cpu() below can run safely with local IRQs enabled) spans the whole
+    //RW-set -> memcpy -> RO-set sequence and is shared by EVERY override_symbol_inst in the module - not just this
+    //one. set_mem_addr_rw()/ro() operate at page granularity while mem_protected is tracked per-instance, so two
+    //unrelated symbols overridden by different shims but sharing a .text page can otherwise race: one instance's
+    //set_symbol_ro() silently re-locks a page another instance just RW'd and is about to memcpy() into, producing
+    //a torn/garbage trampoline that crashes with an invalid opcode far from here whenever it's later executed. This
+    //is what actually happens on DSM 4.4.x kernels - which call mark_rodata_ro()/set_kernel_text_ro() far more
+    //eagerly than 5.x - even though 5.x runs the exact same shim code without incident.
+    mutex_lock(&ovs_patch_lock);
     set_symbol_rw(sym);
 
     WITH_OVS_LOCK(sym,
@@ -230,6 +248,8 @@ int __enable_symbol_override(struct override_symbol_inst *sym)
             sym->installed = true;
         }
     );
+
+    mutex_unlock(&ovs_patch_lock);
 
     return 0;
 }
@@ -244,9 +264,10 @@ int __enable_symbol_override(struct override_symbol_inst *sym)
  */
 int __disable_symbol_override(struct override_symbol_inst *sym)
 {
-    //See __enable_symbol_override() for why the CR0 dance is gone and no IRQ handling is needed here directly, and
-    //why set_symbol_rw() must run unconditionally, fully outside WITH_OVS_LOCK - never gated behind mem_protected
-    //and never re-checked/re-applied inside the lock, since that reaches on_each_cpu() with IRQs disabled.
+    //See __enable_symbol_override() for why the CR0 dance is gone, why no IRQ handling is needed here directly, and
+    //why the whole RW-set -> memcpy -> RO-set sequence must run under the shared ovs_patch_lock mutex - never gated
+    //behind this instance's own mem_protected flag, which can't see another instance's page-protection changes.
+    mutex_lock(&ovs_patch_lock);
     set_symbol_rw(sym);
 
     WITH_OVS_LOCK(sym,
@@ -256,6 +277,8 @@ int __disable_symbol_override(struct override_symbol_inst *sym)
             sym->installed = false;
         }
     );
+
+    mutex_unlock(&ovs_patch_lock);
 
     return 0;
 }
