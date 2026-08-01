@@ -34,22 +34,30 @@
  * pointer once at registration time and calling it directly has no shared mutable state and is safe under
  * concurrency.
  *
+ * NAMING NOTE: Synology renamed this exported symbol between kernel trees - it's
+ * getDiskPortTypeAndIndexByAtaPort() (camelCase) on the 4.4.302 tree (drivers/ata/libata-scsi.c) and
+ * get_disk_port_type_and_index_by_ata_port() (snake_case) on the 5.10.x+ tree (drivers/ata/libata-core.c).
+ * Signature and behavior (including the exact "Invalid parameter\n" printk and NULL-of_root guard) are
+ * identical - only the name differs. We try both names at registration time.
+ *
  * References
- *   - drivers/ata/libata-core.c (get_disk_port_type_and_index_by_ata_port, GPL source)
+ *   - drivers/ata/libata-core.c (get_disk_port_type_and_index_by_ata_port, 5.10.x+, GPL source)
+ *   - drivers/ata/libata-scsi.c (getDiskPortTypeAndIndexByAtaPort, 4.4.302, GPL source)
  *   - drivers/ata/libata-eh.c, drivers/ata/libata-scsi.c (callers)
  *   - drivers/of/base.c (of_root; EXPORT_SYMBOL'd, declared extern in include/linux/of.h)
  */
 #include "dt_disk_port_shim.h"
 
 /*
- * get_disk_port_type_and_index_by_ata_port()/DISK_PORT_TYPE/of_root only exist on the newer,
- * DT-capable platform kernel trees (see hw_config.is_dt in config/platforms.h for the authoritative
- * list). The older non-DT platforms (apollolake, broadwell, broadwellnk, broadwellnkv2,
- * broadwellntbap, denverton, avoton, braswell, bromolow, cedarview, evansport, grantley) build
- * against a 4.4.302 kernel tree that predates this mechanism entirely - <linux/of.h>'s of_root
- * export and/or <linux/synolib.h>'s DISK_PORT_TYPE type don't exist there, so this whole shim is
- * compiled out on those platforms. The log spam this shim silences never applies to them either:
- * they don't implement the DT disk-slot lookup at all, so they can't call into it.
+ * getDiskPortTypeAndIndexByAtaPort()/get_disk_port_type_and_index_by_ata_port()/DISK_PORT_TYPE/of_root only
+ * exist on DT-capable platform kernel trees, i.e. is_dt=true platforms (see hw_config.is_dt in
+ * config/platforms.h for the authoritative list) - this covers both the 4.4.302 tree (geminilake, purley,
+ * r1000, v1000) and the 5.10.x+ tree (geminilakenk, r1000nk, v1000nk, epyc7002+, icelaked, kvmx64). The
+ * older non-DT platforms (apollolake, broadwell, broadwellnk, broadwellnkv2, broadwellntbap, denverton,
+ * avoton, braswell, bromolow, cedarview, evansport, grantley) predate this mechanism entirely on both trees -
+ * <linux/of.h>'s of_root export and/or <linux/synolib.h>'s DISK_PORT_TYPE type don't exist there, so this
+ * whole shim is compiled out on those platforms. The log spam this shim silences never applies to them
+ * either: they don't implement the DT disk-slot lookup at all, so they can't call into it.
  */
 #if defined(RP_PLATFORM_GEMINILAKE) || defined(RP_PLATFORM_PURLEY) || defined(RP_PLATFORM_R1000) || \
     defined(RP_PLATFORM_V1000) || defined(RP_PLATFORM_GEMINILAKENK) || defined(RP_PLATFORM_R1000NK) || \
@@ -65,7 +73,8 @@
 #include <linux/of.h> //of_root
 
 #define SHIM_NAME "DT disk port resolver"
-#define SHIMMED_SYMBOL "get_disk_port_type_and_index_by_ata_port"
+#define SHIMMED_SYMBOL_510 "get_disk_port_type_and_index_by_ata_port" //5.10.x+ tree naming
+#define SHIMMED_SYMBOL_44 "getDiskPortTypeAndIndexByAtaPort" //4.4.302 tree naming (same func, different name)
 
 static override_symbol_inst *ov_disk_port_type = NULL;
 static int (*org_disk_port_type)(const struct ata_port *, DISK_PORT_TYPE *, int *) = NULL;
@@ -90,23 +99,28 @@ int register_dt_disk_port_shim(void)
     shim_reg_in();
 
     //Some is_dt=true platforms (e.g. geminilake/DS920+, purley, r1000, v1000) are still built against the legacy
-    //4.4.x DSM kernel tree, which predates get_disk_port_type_and_index_by_ata_port() entirely - unlike geminilakenk/
-    //r1000nk/v1000nk/epyc7002+/icelaked, which are is_dt=true AND on the 5.10.x+ tree where the symbol actually
-    //exists. is_dt only describes the physical hardware being emulated, not which kernel this specific build runs
-    //on, so this has to be a runtime check, not a platform #if - a missing symbol here just means this particular
-    //kernel never implements the DT disk-slot lookup at all (same as the non-DT compiled-out stub below), not an
-    //error: falling through to -ENXIO here would fail register_dt_disk_port_shim() and panic init_() via
-    //KP_ON_LOAD_ERROR/rp_crash() on every boot of those platforms.
-    if (unlikely(!kernel_has_symbol(SHIMMED_SYMBOL))) {
-        pr_loc_dbg("Skipping " SHIM_NAME " - " SHIMMED_SYMBOL "() not present on this kernel");
-        return 0;
+    //4.4.x DSM kernel tree, unlike geminilakenk/r1000nk/v1000nk/epyc7002+/icelaked, which are is_dt=true AND on the
+    //5.10.x+ tree. is_dt only describes the physical hardware being emulated, not which kernel this specific build
+    //runs on, so this has to be a runtime check, not a platform #if. The 4.4.302 tree does implement this DT
+    //disk-slot lookup - it's just exported under a differently-cased name (see NAMING NOTE at top of file), so we
+    //try both. If neither name exists, this kernel never implements the DT disk-slot lookup at all (same as the
+    //non-DT compiled-out stub below), not an error: falling through to -ENXIO here would fail
+    //register_dt_disk_port_shim() and panic init_() via KP_ON_LOAD_ERROR/rp_crash() on every boot of those platforms.
+    const char *shimmed_symbol = SHIMMED_SYMBOL_510;
+    if (unlikely(!kernel_has_symbol(shimmed_symbol))) {
+        shimmed_symbol = SHIMMED_SYMBOL_44;
+        if (unlikely(!kernel_has_symbol(shimmed_symbol))) {
+            pr_loc_dbg("Skipping " SHIM_NAME " - neither " SHIMMED_SYMBOL_510 "() nor " SHIMMED_SYMBOL_44
+                       "() is present on this kernel");
+            return 0;
+        }
     }
 
-    ov_disk_port_type = override_symbol(SHIMMED_SYMBOL, get_disk_port_type_and_index_by_ata_port_shim);
+    ov_disk_port_type = override_symbol(shimmed_symbol, get_disk_port_type_and_index_by_ata_port_shim);
     if (unlikely(IS_ERR(ov_disk_port_type))) {
         int out = PTR_ERR(ov_disk_port_type);
         ov_disk_port_type = NULL;
-        pr_loc_err("Failed to shim " SHIMMED_SYMBOL "() - error=%d", out);
+        pr_loc_err("Failed to shim %s() - error=%d", shimmed_symbol, out);
         return out;
     }
     org_disk_port_type = __get_org_ptr(ov_disk_port_type);
@@ -124,7 +138,7 @@ int unregister_dt_disk_port_shim(void)
 
     int out = restore_symbol(ov_disk_port_type);
     if (unlikely(out != 0)) {
-        pr_loc_err("Failed to restore " SHIMMED_SYMBOL "() - error=%d", out);
+        pr_loc_err("Failed to restore " SHIM_NAME " - error=%d", out);
         return out;
     }
 
