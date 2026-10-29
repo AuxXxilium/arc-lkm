@@ -2,6 +2,11 @@
 
 This repository publishes the released LKM builds.
 
+### Proposed source fixes
+
+- [Preserve raw SG_IO ATA IDENTIFY responses](patches/README.md): source patch,
+  regression reproduction and hardware observations for the build maintainer.
+
 ### Links
 
 - <a href="https://github.com/AuxXxilium">Overview</a>
